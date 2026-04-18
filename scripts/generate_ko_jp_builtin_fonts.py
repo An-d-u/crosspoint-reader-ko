@@ -5,7 +5,7 @@ KoPubWorld 기본 폰트에 일본어 fallback font stack을 결합한 builtin h
 기본 정책:
 - UI: KoPubWorld Dotum -> Meiryo UI Regular
 - Reader: KoPubWorld Batang -> Yu Mincho
-- 성능 우선: kana + 핵심 일본어 기호 중심, CJK 한자는 primary 폰트가 원래 가진 글리프만 유지
+- 성능 우선: kana + 핵심 일본어 기호 + 실제 책/일반 일본어 보강 한자만 추가
 """
 
 from __future__ import annotations
@@ -16,7 +16,16 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from fontTools.ttLib import TTCollection
+from fontTools.ttLib import TTCollection, TTFont
+
+from japanese_kanji_whitelist import (
+    CJK_END,
+    CJK_START,
+    collect_book_cjk_codepoints,
+    collect_book_non_cjk_codepoints,
+    collect_common_japanese_codepoints,
+    merge_codepoints_to_intervals,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +33,7 @@ FONTCONVERT = ROOT / "lib" / "EpdFont" / "scripts" / "fontconvert.py"
 BUILTIN_DIR = ROOT / "lib" / "EpdFont" / "builtinFonts"
 USER_FONT_DIR = ROOT / "fonts"
 CACHE_FONT_DIR = ROOT / ".cache" / "generated-fonts"
+BOOKS_DIR = ROOT / "books"
 
 KOREAN_INTERVALS = [
     "0x1100,0x11FF",
@@ -41,10 +51,6 @@ JAPANESE_INTERVALS = [
     "0x31F0,0x31FF",
     "0xFF5E,0xFF5E",
     "0xFF60,0xFF9F",
-]
-
-CJK_PRIMARY_ONLY_INTERVALS = [
-    "0x4E00,0x9FFF",
 ]
 
 EXCLUDED_INTERVALS = [
@@ -106,7 +112,63 @@ def extract_ttc_face(ttc_path: Path, face_index: int, output_path: Path) -> Path
     return output_path
 
 
+def load_font_cjk_codepoints(font_path: Path) -> set[int]:
+    font = TTFont(str(font_path))
+    try:
+        cmap = font.getBestCmap() or {}
+        return {cp for cp in cmap.keys() if CJK_START <= cp <= CJK_END}
+    finally:
+        font.close()
+
+
+def load_font_codepoints(font_path: Path) -> set[int]:
+    font = TTFont(str(font_path))
+    try:
+        return set((font.getBestCmap() or {}).keys())
+    finally:
+        font.close()
+
+
+def format_intervals(intervals: list[tuple[int, int]]) -> list[str]:
+    return [f"0x{start:X},0x{end:X}" for start, end in intervals]
+
+
+def build_cjk_intervals(job: FontJob, resolved_fallback_path: Path) -> list[str]:
+    primary_cjk = load_font_cjk_codepoints(job.primary_path)
+    fallback_cjk = {cp for cp in load_font_codepoints(resolved_fallback_path) if CJK_START <= cp <= CJK_END}
+    book_cjk = collect_book_cjk_codepoints(BOOKS_DIR)
+    common_cjk = collect_common_japanese_codepoints()
+
+    supplemental_cjk = ((book_cjk | common_cjk) - primary_cjk) & fallback_cjk
+    merged_cjk = primary_cjk | supplemental_cjk
+    return format_intervals(merge_codepoints_to_intervals(merged_cjk))
+
+
+def build_forced_non_cjk_intervals(job: FontJob, resolved_fallback_path: Path) -> list[str]:
+    primary_all = load_font_codepoints(job.primary_path)
+    fallback_all = load_font_codepoints(resolved_fallback_path)
+    book_non_cjk = collect_book_non_cjk_codepoints(BOOKS_DIR)
+    exportable_non_cjk = book_non_cjk & (primary_all | fallback_all)
+    return format_intervals(merge_codepoints_to_intervals(exportable_non_cjk))
+
+
 def build_fontconvert_command(job: FontJob, resolved_fallback_path: Path) -> list[str]:
+    cjk_intervals = build_cjk_intervals(job, resolved_fallback_path)
+    forced_non_cjk_intervals = build_forced_non_cjk_intervals(job, resolved_fallback_path)
+    interval_file = CACHE_FONT_DIR / f"{job.name}-additional-intervals.txt"
+    forced_interval_file = CACHE_FONT_DIR / f"{job.name}-forced-intervals.txt"
+    interval_file.parent.mkdir(parents=True, exist_ok=True)
+    interval_file.write_text(
+        "\n".join(KOREAN_INTERVALS + JAPANESE_INTERVALS + cjk_intervals) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    forced_interval_file.write_text(
+        "\n".join(forced_non_cjk_intervals) + ("\n" if forced_non_cjk_intervals else ""),
+        encoding="utf-8",
+        newline="\n",
+    )
+
     command = [
         sys.executable,
         str(FONTCONVERT),
@@ -116,11 +178,11 @@ def build_fontconvert_command(job: FontJob, resolved_fallback_path: Path) -> lis
         str(resolved_fallback_path),
         "--2bit",
         "--compress",
+        "--additional-intervals-file",
+        str(interval_file),
+        "--forced-intervals-file",
+        str(forced_interval_file),
     ]
-    for interval in KOREAN_INTERVALS + JAPANESE_INTERVALS + CJK_PRIMARY_ONLY_INTERVALS:
-        command.extend(["--additional-intervals", interval])
-    for interval in CJK_PRIMARY_ONLY_INTERVALS:
-        command.extend(["--primary-only-intervals", interval])
     for interval in EXCLUDED_INTERVALS:
         command.extend(["--exclude-intervals", interval])
     return command

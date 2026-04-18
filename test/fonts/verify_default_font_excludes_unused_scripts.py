@@ -9,6 +9,10 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str((Path(__file__).resolve().parents[2] / "scripts")))
+
+from japanese_kanji_whitelist import collect_book_non_cjk_codepoints
+
 
 ROOT = Path(__file__).resolve().parents[2]
 ALL_H = ROOT / "lib" / "EpdFont" / "builtinFonts" / "all.h"
@@ -57,26 +61,39 @@ def overlaps(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return not (a_end < b_start or b_end < a_start)
 
 
+def expand_overlap(start: int, end: int, excluded_start: int, excluded_end: int) -> set[int]:
+    overlap_start = max(start, excluded_start)
+    overlap_end = min(end, excluded_end)
+    if overlap_start > overlap_end:
+        return set()
+    return set(range(overlap_start, overlap_end + 1))
+
+
 def main() -> int:
     failures: list[str] = []
+    allowed_book_non_cjk = collect_book_non_cjk_codepoints(ROOT / "books")
     for role, header_path in load_default_headers().items():
         intervals = parse_intervals(header_path)
         for label, (excluded_start, excluded_end) in EXCLUDED_INTERVALS.items():
             for start, end in intervals:
                 if overlaps(start, end, excluded_start, excluded_end):
-                    failures.append(
-                        f"{role} default font {header_path.name} overlaps excluded range {label} "
-                        f"(U+{excluded_start:04X}-U+{excluded_end:04X}) via U+{start:04X}-U+{end:04X}"
-                    )
+                    overlap_codepoints = expand_overlap(start, end, excluded_start, excluded_end)
+                    unexpected = sorted(overlap_codepoints - allowed_book_non_cjk)
+                    if unexpected:
+                        failures.append(
+                            f"{role} default font {header_path.name} overlaps excluded range {label} "
+                            f"(U+{excluded_start:04X}-U+{excluded_end:04X}) via U+{start:04X}-U+{end:04X}; "
+                            f"unexpected examples: {', '.join(f'U+{cp:04X}' for cp in unexpected[:5])}"
+                        )
                     break
 
     if failures:
-        print("FAIL: Default builtin fonts still contain excluded script ranges.")
+        print("FAIL: Default builtin fonts still contain unexpected excluded script ranges.")
         for failure in failures:
             print(f" - {failure}")
         return 1
 
-    print("PASS: Default builtin fonts exclude the configured unused script ranges.")
+    print("PASS: Default builtin fonts only include expected codepoints from excluded script ranges.")
     return 0
 
 

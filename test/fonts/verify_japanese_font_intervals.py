@@ -25,6 +25,11 @@ REQUIRED_CODEPOINTS = {
         0x3042: "Hiragana A",
         0x30A2: "Katakana A",
         0x30FC: "Katakana-Hiragana prolonged sound mark",
+        0x56FD: "Kanji 国",
+        0x5B66: "Kanji 学",
+        0x56F3: "Kanji 図",
+        0x6C17: "Kanji 気",
+        0x5909: "Kanji 変",
     },
     "reader": {
         0x3002: "Japanese full stop",
@@ -32,6 +37,11 @@ REQUIRED_CODEPOINTS = {
         0x3042: "Hiragana A",
         0x30A2: "Katakana A",
         0x30FC: "Katakana-Hiragana prolonged sound mark",
+        0x56FD: "Kanji 国",
+        0x5B66: "Kanji 学",
+        0x56F3: "Kanji 図",
+        0x6C17: "Kanji 気",
+        0x5909: "Kanji 変",
     },
 }
 

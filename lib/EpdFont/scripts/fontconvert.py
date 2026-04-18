@@ -16,6 +16,10 @@ parser.add_argument("size", type=int, help="font size to use.")
 parser.add_argument("fontstack", action="store", nargs='+', help="list of font files, ordered by descending priority.")
 parser.add_argument("--2bit", dest="is2Bit", action="store_true", help="generate 2-bit greyscale bitmap instead of 1-bit black and white.")
 parser.add_argument("--additional-intervals", dest="additional_intervals", action="append", help="Additional code point intervals to export as min,max. This argument can be repeated.")
+parser.add_argument("--additional-intervals-file", dest="additional_intervals_file",
+                    help="Path to a text file containing additional code point intervals as min,max, one per line.")
+parser.add_argument("--forced-intervals-file", dest="forced_intervals_file",
+                    help="Path to a text file containing code point intervals that must be kept even if they overlap excluded ranges.")
 parser.add_argument("--exclude-intervals", dest="exclude_intervals", action="append", help="Unicode intervals to exclude from export as min,max. This argument can be repeated.")
 parser.add_argument("--primary-only-intervals", dest="primary_only_intervals", action="append",
                     help="Unicode intervals that may only be exported when the primary font contains the glyph.")
@@ -133,6 +137,22 @@ intervals = [
 add_ints = []
 if args.additional_intervals:
     add_ints = [tuple([int(n, base=0) for n in i.split(",")]) for i in args.additional_intervals]
+if args.additional_intervals_file:
+    with open(args.additional_intervals_file, "r", encoding="utf-8") as interval_file:
+        for line in interval_file:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            add_ints.append(tuple([int(n, base=0) for n in stripped.split(",")]))
+
+forced_ints = []
+if args.forced_intervals_file:
+    with open(args.forced_intervals_file, "r", encoding="utf-8") as interval_file:
+        for line in interval_file:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            forced_ints.append(tuple([int(n, base=0) for n in stripped.split(",")]))
 
 exclude_ints = []
 if args.exclude_intervals:
@@ -227,7 +247,7 @@ def load_glyph(code_point):
         face_index += 1
     return None
 
-unmerged_intervals = sorted(subtract_intervals(intervals + add_ints, exclude_ints))
+unmerged_intervals = sorted(subtract_intervals(intervals + add_ints, exclude_ints) + forced_ints)
 intervals = []
 unvalidated_intervals = []
 for i_start, i_end in unmerged_intervals:
