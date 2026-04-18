@@ -36,8 +36,8 @@ void GfxRenderer::begin() {
   bwBufferChunks.assign((frameBufferSize + BW_BUFFER_CHUNK_SIZE - 1) / BW_BUFFER_CHUNK_SIZE, nullptr);
 }
 
-void GfxRenderer::insertFont(const int fontId, const EpdFontFamily* font) {
-  fontMap[fontId] = std::unique_ptr<UnifiedFontFamily>(new UnifiedFontFamily(font));
+void GfxRenderer::insertFont(const int fontId, const EpdFontFamily* font, const EpdFontFamily* fallbackFont) {
+  fontMap[fontId] = std::unique_ptr<UnifiedFontFamily>(new UnifiedFontFamily(font, fallbackFont));
 }
 
 void GfxRenderer::insertSdFont(const int fontId, SdFontFamily* font) {
@@ -122,12 +122,12 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     return;
   }
 
-  const bool is2Bit = fontFamily.is2Bit(style);
+  bool is2Bit = fontFamily.is2Bit(style);
   const uint8_t width = glyph->width;
   const uint8_t height = glyph->height;
   const int left = glyph->left;
   const int top = glyph->top;
-  const uint8_t ascender = static_cast<uint8_t>(fontFamily.getAscender(style));
+  uint8_t ascender = static_cast<uint8_t>(fontFamily.getAscender(style));
 
   // Synthetic bold: draw each on pixel again one column over when bold is requested
   // but the font has no bold variant.
@@ -139,8 +139,10 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
   // but flash fonts benefit from the decompressor cache, so route flash through the renderer.
   const uint8_t* bitmap = nullptr;
   if (fontFamily.getType() == UnifiedFontFamily::Type::FLASH) {
-    const EpdFontData* fontData = fontFamily.getFlashData(style);
+    const EpdFontData* fontData = fontFamily.getFlashDataForCodepoint(cp, style);
     if (fontData) {
+      is2Bit = fontData->is2Bit;
+      ascender = static_cast<uint8_t>(fontData->ascender);
       bitmap = renderer.getGlyphBitmap(fontData, glyph);
     }
   } else {

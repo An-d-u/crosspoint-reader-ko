@@ -71,7 +71,7 @@ class GfxRenderer {
 
   // Font registry (Korean API — supports both flash and SD-card fonts)
   // Flash fonts (EpdFontFamily) - stores pointer to global font
-  void insertFont(int fontId, const EpdFontFamily* font);
+  void insertFont(int fontId, const EpdFontFamily* font, const EpdFontFamily* fallbackFont = nullptr);
   // SD card fonts (SdFontFamily) - takes ownership
   void insertSdFont(int fontId, SdFontFamily* font);
   // Set fallback font ID (used when requested font is not found)

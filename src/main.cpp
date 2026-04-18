@@ -34,13 +34,17 @@ ActivityManager activityManager(renderer, mappedInputManager);
 FontDecompressor fontDecompressor;
 FontCacheManager fontCacheManager(renderer.getFontMap());
 
-// UI Font (Pretendard 10pt) - Regular only, synthetic bold applied by renderer
+// UI 기본 글꼴: Pretendard 유지, Bold는 렌더러가 synthetic 처리
 EpdFont pretendard10RegularFont(&pretendard_10_regular);
 EpdFontFamily uiFontFamily(&pretendard10RegularFont);
 
-// Korean EPUB reader font (KoPub Batang 14pt) - Regular only, synthetic bold applied by renderer
-EpdFont kopub14RegularFont(&kopub_14_regular);
-EpdFontFamily kopub14FontFamily(&kopub14RegularFont);
+// UI 일본어 fallback: primary에 없는 일본어 글리프만 여기서 찾는다
+EpdFont uiJapaneseFallbackFont(&kopubworld_dotum_jp_10_regular);
+EpdFontFamily uiJapaneseFallbackFamily(&uiJapaneseFallbackFont);
+
+// 리더 기본 글꼴: Batang 계열 + 일본어 fallback, Bold는 렌더러가 synthetic 처리
+EpdFont reader14RegularFont(&kopubworld_batang_jp_14_regular);
+EpdFontFamily kopub14FontFamily(&reader14RegularFont);
 
 // Korean fonts loading from SD card is disabled due to memory constraints
 // Font files should be in /.crosspoint/fonts/ directory
@@ -226,10 +230,10 @@ void setupDisplayAndFonts() {
   // Korean build: Bookerly fonts omitted; KoPub Batang registered below as default reader font.
 
   // UI font (Pretendard 10pt) - used for all UI sizes in Korean version
-  renderer.insertFont(UI_FONT_ID, &uiFontFamily);
-  renderer.insertFont(UI_10_FONT_ID, &uiFontFamily);
-  renderer.insertFont(UI_12_FONT_ID, &uiFontFamily);
-  renderer.insertFont(SMALL_FONT_ID, &uiFontFamily);
+  renderer.insertFont(UI_FONT_ID, &uiFontFamily, &uiJapaneseFallbackFamily);
+  renderer.insertFont(UI_10_FONT_ID, &uiFontFamily, &uiJapaneseFallbackFamily);
+  renderer.insertFont(UI_12_FONT_ID, &uiFontFamily, &uiJapaneseFallbackFamily);
+  renderer.insertFont(SMALL_FONT_ID, &uiFontFamily, &uiJapaneseFallbackFamily);
 
   // Korean EPUB reader font (KoPub Batang 14pt) - always register as fallback
   renderer.insertFont(KOPUB_14_FONT_ID, &kopub14FontFamily);

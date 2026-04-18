@@ -24,8 +24,16 @@ void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const 
 
 const EpdFontData* EpdFontFamily::getData(const Style style) const { return getFont(style)->data; }
 
+const EpdGlyph* EpdFontFamily::getGlyphExact(const uint32_t cp, const Style style) const {
+  return getFont(style)->getGlyphExact(cp);
+}
+
 const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style) const {
   return getFont(style)->getGlyph(cp);
+}
+
+bool EpdFontFamily::hasGlyph(const uint32_t cp, const Style style) const {
+  return getFont(style)->hasGlyph(cp);
 }
 
 bool EpdFontFamily::hasPrintableChars(const char* string, const Style style) const {

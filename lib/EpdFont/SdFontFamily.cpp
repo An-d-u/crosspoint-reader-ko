@@ -1,6 +1,9 @@
 #include "SdFontFamily.h"
 
+#include <algorithm>
+
 #include <HardwareSerial.h>
+#include <Utf8.h>
 
 // ============================================================================
 // SdFontFamily Implementation
@@ -165,9 +168,14 @@ bool SdFontFamily::is2Bit(EpdFontStyle style) const {
 // UnifiedFontFamily Implementation
 // ============================================================================
 
-UnifiedFontFamily::UnifiedFontFamily(const EpdFontFamily* font) : type(Type::FLASH), flashFont(font), sdFont(nullptr) {}
+UnifiedFontFamily::UnifiedFontFamily(const EpdFontFamily* font)
+    : type(Type::FLASH), flashFont(font), flashFallbackFont(nullptr), sdFont(nullptr) {}
 
-UnifiedFontFamily::UnifiedFontFamily(SdFontFamily* font) : type(Type::SD), flashFont(nullptr), sdFont(font) {}
+UnifiedFontFamily::UnifiedFontFamily(const EpdFontFamily* font, const EpdFontFamily* fallbackFont)
+    : type(Type::FLASH), flashFont(font), flashFallbackFont(fallbackFont), sdFont(nullptr) {}
+
+UnifiedFontFamily::UnifiedFontFamily(SdFontFamily* font)
+    : type(Type::SD), flashFont(nullptr), flashFallbackFont(nullptr), sdFont(font) {}
 
 UnifiedFontFamily::~UnifiedFontFamily() {
   // flashFont is not owned (points to global), don't delete
@@ -175,8 +183,9 @@ UnifiedFontFamily::~UnifiedFontFamily() {
 }
 
 UnifiedFontFamily::UnifiedFontFamily(UnifiedFontFamily&& other) noexcept
-    : type(other.type), flashFont(other.flashFont), sdFont(other.sdFont) {
+    : type(other.type), flashFont(other.flashFont), flashFallbackFont(other.flashFallbackFont), sdFont(other.sdFont) {
   other.flashFont = nullptr;
+  other.flashFallbackFont = nullptr;
   other.sdFont = nullptr;
 }
 
@@ -187,28 +196,90 @@ UnifiedFontFamily& UnifiedFontFamily::operator=(UnifiedFontFamily&& other) noexc
 
     type = other.type;
     flashFont = other.flashFont;
+    flashFallbackFont = other.flashFallbackFont;
     sdFont = other.sdFont;
 
     other.flashFont = nullptr;
+    other.flashFallbackFont = nullptr;
     other.sdFont = nullptr;
   }
   return *this;
 }
 
 void UnifiedFontFamily::getTextDimensions(const char* string, int* w, int* h, EpdFontStyle style) const {
-  if (type == Type::FLASH && flashFont) {
-    flashFont->getTextDimensions(string, w, h, style);
-  } else if (sdFont) {
+  if (type == Type::SD && sdFont) {
     sdFont->getTextDimensions(string, w, h, style);
-  } else {
-    *w = 0;
-    *h = 0;
+    return;
   }
+
+  *w = 0;
+  *h = 0;
+  if (type != Type::FLASH || !flashFont || !string || *string == '\0') {
+    return;
+  }
+
+  int minX = 0, minY = 0, maxX = 0, maxY = 0;
+  int lastBaseX = 0;
+  int lastBaseLeft = 0;
+  int lastBaseWidth = 0;
+  int lastBaseTop = 0;
+  int32_t prevAdvanceFP = 0;
+  uint32_t prevCp = 0;
+
+  uint32_t cp;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&string)))) {
+    const bool isCombining = utf8IsCombiningMark(cp);
+    if (!isCombining) {
+      cp = applyLigatures(cp, string, style);
+    }
+
+    const EpdGlyph* glyph = getGlyph(cp, style);
+    if (!glyph) {
+      if (!isCombining) {
+        lastBaseX += fp4::toPixel(prevAdvanceFP);
+        prevCp = 0;
+        prevAdvanceFP = 0;
+        lastBaseLeft = 0;
+        lastBaseWidth = 0;
+        lastBaseTop = 0;
+      }
+      continue;
+    }
+
+    const int raiseBy = isCombining ? combiningMark::raiseAboveBase(glyph->top, glyph->height, lastBaseTop) : 0;
+
+    if (!isCombining && prevCp != 0) {
+      const auto kernFP = getKerning(prevCp, cp, style);
+      lastBaseX += fp4::toPixel(prevAdvanceFP + kernFP);
+    }
+
+    const int glyphBaseX =
+        isCombining ? combiningMark::centerOver(lastBaseX, lastBaseLeft, lastBaseWidth, glyph->left, glyph->width)
+                    : lastBaseX;
+    const int glyphBaseY = -raiseBy;
+
+    minX = std::min(minX, glyphBaseX + glyph->left);
+    maxX = std::max(maxX, glyphBaseX + glyph->left + glyph->width);
+    minY = std::min(minY, glyphBaseY + glyph->top - glyph->height);
+    maxY = std::max(maxY, glyphBaseY + glyph->top);
+
+    if (!isCombining) {
+      lastBaseLeft = glyph->left;
+      lastBaseWidth = glyph->width;
+      lastBaseTop = glyph->top;
+      prevAdvanceFP = glyph->advanceX;
+      prevCp = cp;
+    }
+  }
+
+  *w = maxX - minX;
+  *h = maxY - minY;
 }
 
 bool UnifiedFontFamily::hasPrintableChars(const char* string, EpdFontStyle style) const {
   if (type == Type::FLASH && flashFont) {
-    return flashFont->hasPrintableChars(string, style);
+    return flashFont->hasPrintableChars(string, style) ||
+           (flashFallbackFont && flashFallbackFont->hasPrintableChars(string, style));
   } else if (sdFont) {
     return sdFont->hasPrintableChars(string, style);
   }
@@ -217,6 +288,12 @@ bool UnifiedFontFamily::hasPrintableChars(const char* string, EpdFontStyle style
 
 const EpdGlyph* UnifiedFontFamily::getGlyph(uint32_t cp, EpdFontStyle style) const {
   if (type == Type::FLASH && flashFont) {
+    if (flashFont->hasGlyph(cp, style)) {
+      return flashFont->getGlyphExact(cp, style);
+    }
+    if (flashFallbackFont && flashFallbackFont->hasGlyph(cp, style)) {
+      return flashFallbackFont->getGlyphExact(cp, style);
+    }
     return flashFont->getGlyph(cp, style);
   } else if (sdFont) {
     return sdFont->getGlyph(cp, style);
@@ -226,9 +303,8 @@ const EpdGlyph* UnifiedFontFamily::getGlyph(uint32_t cp, EpdFontStyle style) con
 
 const uint8_t* UnifiedFontFamily::getGlyphBitmap(uint32_t cp, EpdFontStyle style) const {
   if (type == Type::FLASH && flashFont) {
-    // For flash fonts, get bitmap from the data structure
-    const EpdFontData* data = flashFont->getData(style);
-    const EpdGlyph* glyph = flashFont->getGlyph(cp, style);
+    const EpdFontData* data = getFlashDataForCodepoint(cp, style);
+    const EpdGlyph* glyph = getGlyph(cp, style);
     if (data && glyph) {
       return &data->bitmap[glyph->dataOffset];
     }
@@ -284,6 +360,19 @@ const EpdFontData* UnifiedFontFamily::getFlashData(EpdFontStyle style) const {
     return flashFont->getData(style);
   }
   return nullptr;
+}
+
+const EpdFontData* UnifiedFontFamily::getFlashDataForCodepoint(uint32_t cp, EpdFontStyle style) const {
+  if (type != Type::FLASH || !flashFont) {
+    return nullptr;
+  }
+  if (flashFont->hasGlyph(cp, style)) {
+    return flashFont->getData(style);
+  }
+  if (flashFallbackFont && flashFallbackFont->hasGlyph(cp, style)) {
+    return flashFallbackFont->getData(style);
+  }
+  return flashFont->getData(style);
 }
 
 bool UnifiedFontFamily::hasBold() const {

@@ -71,11 +71,13 @@ class UnifiedFontFamily {
  private:
   Type type;
   const EpdFontFamily* flashFont;  // Non-owning pointer for flash fonts (they're global)
+  const EpdFontFamily* flashFallbackFont = nullptr;  // Optional non-owning fallback for flash fonts
   SdFontFamily* sdFont;            // Owned pointer for SD fonts
 
  public:
   // Construct from flash font (EpdFontFamily) - stores pointer, does not copy
   explicit UnifiedFontFamily(const EpdFontFamily* font);
+  UnifiedFontFamily(const EpdFontFamily* font, const EpdFontFamily* fallbackFont);
 
   // Construct from SD font family (takes ownership)
   explicit UnifiedFontFamily(SdFontFamily* font);
@@ -109,6 +111,7 @@ class UnifiedFontFamily {
 
   // Flash font specific (returns nullptr for SD fonts)
   const EpdFontData* getFlashData(EpdFontStyle style = REGULAR) const;
+  const EpdFontData* getFlashDataForCodepoint(uint32_t cp, EpdFontStyle style = REGULAR) const;
 
   // Check if bold variant is available (for synthetic bold decision)
   bool hasBold() const;

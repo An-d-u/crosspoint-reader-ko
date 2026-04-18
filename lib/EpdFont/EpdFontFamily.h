@@ -12,7 +12,9 @@ class EpdFontFamily {
   ~EpdFontFamily() = default;
   void getTextDimensions(const char* string, int* w, int* h, Style style = REGULAR) const;
   const EpdFontData* getData(Style style = REGULAR) const;
+  const EpdGlyph* getGlyphExact(uint32_t cp, Style style = REGULAR) const;
   const EpdGlyph* getGlyph(uint32_t cp, Style style = REGULAR) const;
+  bool hasGlyph(uint32_t cp, Style style = REGULAR) const;
   bool hasPrintableChars(const char* string, Style style = REGULAR) const;
 
   // Check if bold variant is available (for synthetic bold decision)

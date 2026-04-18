@@ -16,6 +16,9 @@ parser.add_argument("size", type=int, help="font size to use.")
 parser.add_argument("fontstack", action="store", nargs='+', help="list of font files, ordered by descending priority.")
 parser.add_argument("--2bit", dest="is2Bit", action="store_true", help="generate 2-bit greyscale bitmap instead of 1-bit black and white.")
 parser.add_argument("--additional-intervals", dest="additional_intervals", action="append", help="Additional code point intervals to export as min,max. This argument can be repeated.")
+parser.add_argument("--exclude-intervals", dest="exclude_intervals", action="append", help="Unicode intervals to exclude from export as min,max. This argument can be repeated.")
+parser.add_argument("--primary-only-intervals", dest="primary_only_intervals", action="append",
+                    help="Unicode intervals that may only be exported when the primary font contains the glyph.")
 parser.add_argument("--compress", dest="compress", action="store_true", help="Compress glyph bitmaps using DEFLATE with group-based compression.")
 parser.add_argument("--force-autohint", dest="force_autohint", action="store_true", help="Force FreeType auto-hinter instead of native font hinting. Improves stem width consistency for fonts with weak or no native TrueType hints.")
 args = parser.parse_args()
@@ -131,6 +134,14 @@ add_ints = []
 if args.additional_intervals:
     add_ints = [tuple([int(n, base=0) for n in i.split(",")]) for i in args.additional_intervals]
 
+exclude_ints = []
+if args.exclude_intervals:
+    exclude_ints = [tuple([int(n, base=0) for n in i.split(",")]) for i in args.exclude_intervals]
+
+primary_only_ints = []
+if args.primary_only_intervals:
+    primary_only_ints = [tuple([int(n, base=0) for n in i.split(",")]) for i in args.primary_only_intervals]
+
 def norm_floor(val):
     return int(math.floor(val / (1 << 6)))
 
@@ -168,9 +179,46 @@ def chunks(l, n):
     for i in range(0, len(l), n):
         yield l[i:i + n]
 
+def subtract_intervals(base_intervals, excluded_intervals):
+    if not excluded_intervals:
+        return list(base_intervals)
+
+    normalized_excluded = []
+    for ex_start, ex_end in sorted(excluded_intervals):
+        if normalized_excluded and ex_start <= normalized_excluded[-1][1] + 1:
+            normalized_excluded[-1] = (normalized_excluded[-1][0], max(normalized_excluded[-1][1], ex_end))
+        else:
+            normalized_excluded.append((ex_start, ex_end))
+
+    result = []
+    for start, end in base_intervals:
+        segments = [(start, end)]
+        for ex_start, ex_end in normalized_excluded:
+            next_segments = []
+            for seg_start, seg_end in segments:
+                if ex_end < seg_start or seg_end < ex_start:
+                    next_segments.append((seg_start, seg_end))
+                    continue
+                if seg_start < ex_start:
+                    next_segments.append((seg_start, ex_start - 1))
+                if ex_end < seg_end:
+                    next_segments.append((ex_end + 1, seg_end))
+            segments = next_segments
+            if not segments:
+                break
+        result.extend(segments)
+    return result
+
+def code_point_in_intervals(code_point, interval_list):
+    for start, end in interval_list:
+        if start <= code_point <= end:
+            return True
+    return False
+
 def load_glyph(code_point):
+    face_limit = 1 if code_point_in_intervals(code_point, primary_only_ints) else len(font_stack)
     face_index = 0
-    while face_index < len(font_stack):
+    while face_index < face_limit:
         face = font_stack[face_index]
         glyph_index = face.get_char_index(code_point)
         if glyph_index > 0:
@@ -179,7 +227,7 @@ def load_glyph(code_point):
         face_index += 1
     return None
 
-unmerged_intervals = sorted(intervals + add_ints)
+unmerged_intervals = sorted(subtract_intervals(intervals + add_ints, exclude_ints))
 intervals = []
 unvalidated_intervals = []
 for i_start, i_end in unmerged_intervals:
@@ -722,6 +770,15 @@ if compress and not is2Bit:
     print("Error: --compress requires --2bit (byte-aligned compression only supports 2-bit format)", file=sys.stderr)
     sys.exit(1)
 if compress:
+    def chunk_ranges(start, end, chunk_size):
+        ranges = []
+        cursor = start
+        while cursor <= end:
+            chunk_end = min(cursor + chunk_size - 1, end)
+            ranges.append((cursor, chunk_end))
+            cursor = chunk_end + 1
+        return ranges
+
     # Script-based grouping: glyphs that co-occur in typical text rendering
     # are grouped together for efficient LRU caching on the embedded target.
     # Since glyphs are in codepoint order, glyphs in the same Unicode block
@@ -733,15 +790,22 @@ if compress:
         (0x0180, 0x024F),   # Latin Extended-B
         (0x0300, 0x036F),   # Combining Diacritical Marks
         (0x0400, 0x04FF),   # Cyrillic
+        (0x1100, 0x11FF),   # Hangul Jamo
         (0x1EA0, 0x1EF9),   # Vietnamese Extended
         (0x2000, 0x206F),   # General Punctuation
         (0x2070, 0x209F),   # Superscripts & Subscripts
         (0x20A0, 0x20CF),   # Currency Symbols
         (0x2190, 0x21FF),   # Arrows
         (0x2200, 0x22FF),   # Math Operators
+        (0x3000, 0x303F),   # CJK Symbols and Punctuation
+        (0x3040, 0x309F),   # Hiragana
+        (0x30A0, 0x30FF),   # Katakana
+        (0x3130, 0x318F),   # Hangul Compatibility Jamo
+        (0x31F0, 0x31FF),   # Katakana Phonetic Extensions
         (0xFB00, 0xFB06),   # Alphabetic Presentation Forms (ligatures)
+        (0xFF60, 0xFF9F),   # Halfwidth Katakana
         (0xFFFD, 0xFFFD),   # Replacement Character
-    ]
+    ] + chunk_ranges(0x4E00, 0x9FFF, 0x100) + chunk_ranges(0xAC00, 0xD7AF, 0x100)
 
     def get_script_group(code_point):
         for i, (start, end) in enumerate(SCRIPT_GROUP_RANGES):
