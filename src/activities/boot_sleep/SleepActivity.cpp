@@ -300,8 +300,13 @@ void SleepActivity::renderCoverSleepScreen() const {
     Bitmap bitmap(file);
     const auto parseResult = bitmap.parseHeaders();
     if (parseResult == BmpReaderError::Ok) {
-      // Validate file isn't truncated: check actual size against expected pixel data
-      const uint32_t expectedSize = static_cast<uint32_t>(bitmap.getRowBytes()) * bitmap.getHeight() + 70;
+      // Validate file isn't truncated: check actual size against header + pixel data.
+      // The prior constant `+ 70` over-estimated the 62-byte 1-bit BMP header by 8 bytes
+      // and flagged every well-formed 1-bit cover (XTC, TXT) as truncated, deleting it
+      // on every sleep cycle — broken since 1.0.0-ko.1. Use the real header offset from
+      // the parsed BMP so 1-bit (62B), 8-bit grayscale (1078B), etc. all validate.
+      const uint32_t expectedSize =
+          bitmap.getDataOffset() + static_cast<uint32_t>(bitmap.getRowBytes()) * bitmap.getHeight();
       if (fileSize < expectedSize) {
         LOG_DBG("SLP", "Cover BMP truncated: %lu bytes < expected %lu, deleting", fileSize, expectedSize);
         file.close();

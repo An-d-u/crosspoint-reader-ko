@@ -76,6 +76,10 @@ class Bitmap {
   int getRowBytes() const { return rowBytes; }
   bool is1Bit() const { return bpp == 1; }
   uint16_t getBpp() const { return bpp; }
+  // Byte offset from start of file to pixel data (file+DIB+palette size).
+  // Populated by parseHeaders(). Used to compute the exact expected file size
+  // for a well-formed BMP (varies by bit depth: ~62 for 1-bit, ~1078 for 8-bit).
+  uint32_t getDataOffset() const { return bfOffBits; }
 
  private:
   static uint16_t readLE16(FsFile& f);
