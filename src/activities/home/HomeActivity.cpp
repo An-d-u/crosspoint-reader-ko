@@ -57,6 +57,19 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
   int progress = 0;
   for (RecentBook& book : recentBooks) {
+    // Recovery for devices that previously hit a transient thumb-gen OOM and
+    // had coverBmpPath persisted as "" in recent_books.json. Rebuild the
+    // cache-path template from the book's extension so the regular generation
+    // path below gets another chance this home entry. Constructing Xtc/Epub
+    // here only hashes the filepath — no parser or file I/O yet.
+    if (book.coverBmpPath.empty() && !book.path.empty()) {
+      if (FsHelpers::hasXtcExtension(book.path)) {
+        book.coverBmpPath = Xtc(book.path, "/.crosspoint").getThumbBmpPath();
+      } else if (FsHelpers::hasEpubExtension(book.path)) {
+        book.coverBmpPath = Epub(book.path, "/.crosspoint").getThumbBmpPath();
+      }
+    }
+
     if (!book.coverBmpPath.empty()) {
       std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
       if (!Storage.exists(coverPath.c_str())) {
@@ -74,8 +87,13 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
           bool success = epub.generateThumbBmp(coverHeight);
           if (!success) {
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
-            book.coverBmpPath = "";
+            // Don't clear coverBmpPath on transient allocation failure — that would
+            // persist an empty path to recent_books.json and permanently hide the
+            // thumbnail (even across reboots) until the book is re-opened. Instead,
+            // leave the path intact so the next home entry retries when the heap
+            // may be less fragmented. BaseTheme/LyraTheme already fall back cleanly
+            // when the thumb file is missing on disk.
+            LOG_DBG("HOME", "Epub thumb gen failed — keeping path, will retry: %s", book.path.c_str());
           }
           coverRendered = false;
           requestUpdate();
@@ -91,8 +109,11 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
             bool success = xtc.generateThumbBmp(coverHeight);
             if (!success) {
-              RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
-              book.coverBmpPath = "";
+              // Transient thumb-generation failure is almost always heap fragmentation
+              // (XTC needs a ~48KB contiguous page buffer; XTCH needs ~96KB). Don't
+              // persist an empty coverBmpPath — that would permanently hide the thumb
+              // across reboots. Leave the path and retry on the next home entry.
+              LOG_DBG("HOME", "XTC thumb gen failed — keeping path, will retry: %s", book.path.c_str());
             }
             coverRendered = false;
             requestUpdate();
