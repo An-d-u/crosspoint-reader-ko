@@ -11,7 +11,12 @@ using namespace i18n_strings;
 
 // Settings file path
 static constexpr const char* SETTINGS_FILE = "/.crosspoint/language.bin";
-static constexpr uint8_t SETTINGS_VERSION = 1;
+static constexpr uint8_t SETTINGS_VERSION = 2;
+// v1 stored Language as a raw enum index. Upstream 1.2.0 inserted Belarusian at
+// position 11 (alphabetical tie-break with korean.yaml _order="11"), shifting
+// Korean from 11 to 12. Users upgrading from 1.1.x would otherwise see Cyrillic
+// (Belarusian) instead of Korean. v2 bumps the version and remaps lang==11.
+static constexpr uint8_t V1_KOREAN_INDEX = 11;
 
 I18n& I18n::getInstance() {
   static I18n instance;
@@ -70,16 +75,31 @@ void I18n::loadSettings() {
 
   uint8_t version;
   serialization::readPod(file, version);
-  if (version != SETTINGS_VERSION) {
-    LOG_DBG("I18N", "Settings version mismatch");
+  if (version > SETTINGS_VERSION) {
+    LOG_DBG("I18N", "Settings version %u newer than supported %u, using default", version, SETTINGS_VERSION);
     return;
   }
 
   uint8_t lang;
   serialization::readPod(file, lang);
+  file.close();
+
+  // v1 -> v2 migration: Korean shifted from enum index 11 to 12 when upstream
+  // 1.2.0 inserted Belarusian. Remap to the current KOREAN index so v1 users
+  // don't boot into Cyrillic.
+  if (version == 1 && lang == V1_KOREAN_INDEX) {
+    lang = static_cast<uint8_t>(Language::KOREAN);
+    LOG_DBG("I18N", "Migrated v1 Korean index %u -> %u", V1_KOREAN_INDEX, lang);
+  }
+
   if (lang < static_cast<size_t>(Language::_COUNT)) {
     _language = static_cast<Language>(lang);
     LOG_DBG("I18N", "Loaded language: %d", static_cast<int>(_language));
+  }
+
+  // Persist with current version so migration runs only once per device.
+  if (version != SETTINGS_VERSION) {
+    saveSettings();
   }
 }
 
