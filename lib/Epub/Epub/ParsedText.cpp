@@ -14,6 +14,7 @@
 constexpr int MAX_COST = std::numeric_limits<int>::max();
 
 namespace {
+constexpr int kRubyContinuationTightenPx = 10;
 
 // Soft hyphen byte pattern used throughout EPUBs (UTF-8 for U+00AD).
 constexpr char SOFT_HYPHEN_UTF8[] = "\xC2\xAD";
@@ -78,11 +79,19 @@ uint16_t measureTokenWidth(const GfxRenderer& renderer, const int fontId, const 
                           const std::string& rubyText, const EpdFontFamily::Style style,
                           const bool appendHyphen = false) {
   const uint16_t baseWidth = measureWordWidth(renderer, fontId, word, style, appendHyphen);
-  if (rubyText.empty()) {
-    return baseWidth;
+  (void)rubyFontId;
+  (void)rubyText;
+  return baseWidth;
+}
+
+int getRubyContinuationTighten(const std::vector<std::string>& rubyTexts, const size_t nextIndex) {
+  if (nextIndex == 0 || nextIndex >= rubyTexts.size()) {
+    return 0;
   }
-  const uint16_t rubyWidth = renderer.getTextAdvanceX(rubyFontId, rubyText.c_str(), EpdFontFamily::REGULAR);
-  return std::max(baseWidth, rubyWidth);
+  if (rubyTexts[nextIndex - 1].empty() && rubyTexts[nextIndex].empty()) {
+    return 0;
+  }
+  return kRubyContinuationTightenPx;
 }
 
 }  // namespace
@@ -141,6 +150,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
   while (!words.empty()) {
     std::vector<std::string> lineWordsVec;
     std::vector<std::string> lineRubyTextsVec;
+    std::vector<bool> lineWordContinuesVec;
     std::vector<int> lineWordWidths;
     std::vector<EpdFontFamily::Style> lineWordStylesVec;
 
@@ -166,21 +176,25 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
           // Whole word fits
           lineWordsVec.push_back(word);
           lineRubyTextsVec.push_back(rubyText);
+          lineWordContinuesVec.push_back(false);
           lineWordWidths.push_back(wordWidth);
           lineWordStylesVec.push_back(wordStyle);
           totalWordWidth = wordWidth;
           words.erase(words.begin());
           rubyTexts.erase(rubyTexts.begin());
+          wordContinues.erase(wordContinues.begin());
           wordStyles.erase(wordStyles.begin());
         } else {
           if (!rubyText.empty()) {
             lineWordsVec.push_back(word);
             lineRubyTextsVec.push_back(rubyText);
+            lineWordContinuesVec.push_back(false);
             lineWordWidths.push_back(wordWidth);
             lineWordStylesVec.push_back(wordStyle);
             totalWordWidth = wordWidth;
             words.erase(words.begin());
             rubyTexts.erase(rubyTexts.begin());
+            wordContinues.erase(wordContinues.begin());
             wordStyles.erase(wordStyles.begin());
             break;
           }
@@ -200,8 +214,10 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
             partial = chars[0];
           }
           int partialWidth = renderer.getTextWidth(fontId, partial.c_str(), wordStyle);
+          const bool attachToPrevious = wordContinues.front();
           lineWordsVec.push_back(partial);
           lineRubyTextsVec.emplace_back();
+          lineWordContinuesVec.push_back(attachToPrevious);
           lineWordWidths.push_back(partialWidth);
           lineWordStylesVec.push_back(wordStyle);
           totalWordWidth = partialWidth;
@@ -213,18 +229,22 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
           } else {
             words.erase(words.begin());
             rubyTexts.erase(rubyTexts.begin());
+            wordContinues.erase(wordContinues.begin());
             wordStyles.erase(wordStyles.begin());
           }
         }
       } else if (newSpacing >= minSpacing) {
         // Adding this word keeps spacing >= minSpacing - add it
+        const bool attachToPrevious = wordContinues.front();
         lineWordsVec.push_back(word);
         lineRubyTextsVec.push_back(rubyText);
+        lineWordContinuesVec.push_back(attachToPrevious);
         lineWordWidths.push_back(wordWidth);
         lineWordStylesVec.push_back(wordStyle);
         totalWordWidth = newTotalWidth;
         words.erase(words.begin());
         rubyTexts.erase(rubyTexts.begin());
+        wordContinues.erase(wordContinues.begin());
         wordStyles.erase(wordStyles.begin());
 
         // If spacing is now within range, we might be done with this line
@@ -257,8 +277,10 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
 
           if (charsFit > 0) {
             int partialWidth = renderer.getTextWidth(fontId, partial.c_str(), wordStyle);
+            const bool attachToPrevious = wordContinues.front();
             lineWordsVec.push_back(partial);
             lineRubyTextsVec.emplace_back();
+            lineWordContinuesVec.push_back(attachToPrevious);
             lineWordWidths.push_back(partialWidth);
             lineWordStylesVec.push_back(wordStyle);
             totalWordWidth += partialWidth;
@@ -270,6 +292,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
             } else {
               words.erase(words.begin());
               rubyTexts.erase(rubyTexts.begin());
+              wordContinues.erase(wordContinues.begin());
               wordStyles.erase(wordStyles.begin());
             }
           }
@@ -320,8 +343,10 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
       if (charsFit == 0) break;  // Can't fit any character
 
       // Add partial
+      const bool attachToPrevious = wordContinues.front();
       lineWordsVec.push_back(partial);
       lineRubyTextsVec.emplace_back();
+      lineWordContinuesVec.push_back(attachToPrevious);
       lineWordWidths.push_back(partialWidth);
       lineWordStylesVec.push_back(nextStyle);
       totalWordWidth += partialWidth;
@@ -333,6 +358,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
       } else {
         words.erase(words.begin());
         rubyTexts.erase(rubyTexts.begin());
+        wordContinues.erase(wordContinues.begin());
         wordStyles.erase(wordStyles.begin());
       }
     }
@@ -355,7 +381,13 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
         lineWords.push_back(lineWordsVec[i]);
         lineRubyTexts.push_back(lineRubyTextsVec[i]);
         lineWordStyles.push_back(lineWordStylesVec[i]);
-        xpos += lineWordWidths[i] + minSpacing;
+        if (i < lineWordsVec.size() - 1) {
+          int gap = minSpacing;
+          if (lineWordContinuesVec[i + 1]) {
+            gap = std::max(0, gap - getRubyContinuationTighten(lineRubyTextsVec, i + 1));
+          }
+          xpos += lineWordWidths[i] + gap;
+        }
       }
     } else {
       // Justified: distribute spare space evenly across gaps
@@ -372,6 +404,9 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
 
         if (i < lineWordsVec.size() - 1) {
           int gap = baseSpacing + (static_cast<int>(i) < extraPixels ? 1 : 0);
+          if (lineWordContinuesVec[i + 1]) {
+            gap = std::max(0, gap - getRubyContinuationTighten(lineRubyTextsVec, i + 1));
+          }
           xpos += lineWordWidths[i] + gap;
         }
       }

@@ -12,7 +12,7 @@
 
 namespace {
 constexpr uint8_t SECTION_FILE_VERSION =
-    22;  // Korean + upstream + ruby text serialization/layout support
+    24;  // Korean + upstream + ruby boundary compaction in character-wrap layout
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) +
                                  sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint32_t) +

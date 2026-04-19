@@ -6,6 +6,12 @@
 #include <Logging.h>
 #include <Serialization.h>
 
+namespace {
+constexpr int kRubyLineExtraPx = 2;
+constexpr int kRubyBaseYOffsetPx = 2;
+constexpr int kRubyTextLiftPx = 13;
+}
+
 bool TextBlock::hasRuby() const {
   for (const auto& rubyText : rubyTexts) {
     if (!rubyText.empty()) {
@@ -21,7 +27,7 @@ int TextBlock::getRenderedLineHeight(const GfxRenderer& renderer, const int font
   if (!hasRuby()) {
     return baseLineHeight;
   }
-  return baseLineHeight + renderer.getLineHeight(rubyFontId);
+  return baseLineHeight + kRubyLineExtraPx;
 }
 
 void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int rubyFontId, const int x,
@@ -35,7 +41,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
     return;
   }
 
-  const int rubyReserve = hasRuby() ? renderer.getLineHeight(rubyFontId) : 0;
+  const int rubyReserve = hasRuby() ? kRubyBaseYOffsetPx : 0;
   const int baseY = y + rubyReserve;
 
   for (size_t i = 0; i < words.size(); i++) {
@@ -48,8 +54,10 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
 
     if (!rubyTexts[i].empty()) {
       const int rubyWidth = renderer.getTextAdvanceX(rubyFontId, rubyTexts[i].c_str(), EpdFontFamily::REGULAR);
-      const int centeredRubyX = wordX + std::max(0, (tokenWidth - rubyWidth) / 2);
-      renderer.drawText(rubyFontId, centeredRubyX, y, rubyTexts[i].c_str(), true, EpdFontFamily::REGULAR);
+      const int baseCenterX = centeredBaseX + (baseWidth / 2);
+      const int centeredRubyX = baseCenterX - (rubyWidth / 2);
+      const int rubyY = y - kRubyTextLiftPx;
+      renderer.drawText(rubyFontId, centeredRubyX, rubyY, rubyTexts[i].c_str(), true, EpdFontFamily::REGULAR);
     }
 
     if ((currentStyle & EpdFontFamily::UNDERLINE) != 0) {
