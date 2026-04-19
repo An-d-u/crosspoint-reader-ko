@@ -60,6 +60,11 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
               hasCover = false;
             }
             file.close();
+          } else {
+            // File missing on disk (e.g. thumb generation is being retried after a
+            // transient OOM). Fall through to the empty-cover fallback so the tile
+            // doesn't render as a blank white rectangle.
+            hasCover = false;
           }
         }
         // Draw either way
