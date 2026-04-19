@@ -1,29 +1,64 @@
 #include "TextBlock.h"
 
+#include <algorithm>
+
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Serialization.h>
 
-void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
+bool TextBlock::hasRuby() const {
+  for (const auto& rubyText : rubyTexts) {
+    if (!rubyText.empty()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int TextBlock::getRenderedLineHeight(const GfxRenderer& renderer, const int fontId, const int rubyFontId,
+                                     const float lineCompression) const {
+  const int baseLineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
+  if (!hasRuby()) {
+    return baseLineHeight;
+  }
+  return baseLineHeight + renderer.getLineHeight(rubyFontId);
+}
+
+void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int rubyFontId, const int x,
+                       const int y) const {
   // Validate iterator bounds before rendering
-  if (words.size() != wordXpos.size() || words.size() != wordStyles.size()) {
-    LOG_ERR("TXB", "Render skipped: size mismatch (words=%u, xpos=%u, styles=%u)\n", (uint32_t)words.size(),
-            (uint32_t)wordXpos.size(), (uint32_t)wordStyles.size());
+  if (words.size() != wordXpos.size() || words.size() != wordStyles.size() || words.size() != rubyTexts.size() ||
+      words.size() != tokenWidths.size()) {
+    LOG_ERR("TXB", "Render skipped: size mismatch (words=%u, xpos=%u, styles=%u, ruby=%u, widths=%u)\n",
+            (uint32_t)words.size(), (uint32_t)wordXpos.size(), (uint32_t)wordStyles.size(), (uint32_t)rubyTexts.size(),
+            (uint32_t)tokenWidths.size());
     return;
   }
+
+  const int rubyReserve = hasRuby() ? renderer.getLineHeight(rubyFontId) : 0;
+  const int baseY = y + rubyReserve;
 
   for (size_t i = 0; i < words.size(); i++) {
     const int wordX = wordXpos[i] + x;
     const EpdFontFamily::Style currentStyle = wordStyles[i];
-    renderer.drawText(fontId, wordX, y, words[i].c_str(), true, currentStyle);
+    const int tokenWidth = tokenWidths[i];
+    const int baseWidth = renderer.getTextAdvanceX(fontId, words[i].c_str(), currentStyle);
+    const int centeredBaseX = wordX + std::max(0, (tokenWidth - baseWidth) / 2);
+    renderer.drawText(fontId, centeredBaseX, baseY, words[i].c_str(), true, currentStyle);
+
+    if (!rubyTexts[i].empty()) {
+      const int rubyWidth = renderer.getTextAdvanceX(rubyFontId, rubyTexts[i].c_str(), EpdFontFamily::REGULAR);
+      const int centeredRubyX = wordX + std::max(0, (tokenWidth - rubyWidth) / 2);
+      renderer.drawText(rubyFontId, centeredRubyX, y, rubyTexts[i].c_str(), true, EpdFontFamily::REGULAR);
+    }
 
     if ((currentStyle & EpdFontFamily::UNDERLINE) != 0) {
       const std::string& w = words[i];
       const int fullWordWidth = renderer.getTextWidth(fontId, w.c_str(), currentStyle);
-      // y is the top of the text line; add ascender to reach baseline, then offset 2px below
-      const int underlineY = y + renderer.getFontAscenderSize(fontId) + 2;
+      // baseY is the top of the base text line; add ascender to reach baseline, then offset 2px below
+      const int underlineY = baseY + renderer.getFontAscenderSize(fontId) + 2;
 
-      int startX = wordX;
+      int startX = centeredBaseX;
       int underlineWidth = fullWordWidth;
 
       // if word starts with em-space ("\xe2\x80\x83"), account for the additional indent before drawing the line
@@ -42,16 +77,19 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
 }
 
 bool TextBlock::serialize(FsFile& file) const {
-  if (words.size() != wordXpos.size() || words.size() != wordStyles.size()) {
-    LOG_ERR("TXB", "Serialization failed: size mismatch (words=%u, xpos=%u, styles=%u)\n", words.size(),
-            wordXpos.size(), wordStyles.size());
+  if (words.size() != wordXpos.size() || words.size() != wordStyles.size() || words.size() != rubyTexts.size() ||
+      words.size() != tokenWidths.size()) {
+    LOG_ERR("TXB", "Serialization failed: size mismatch (words=%u, xpos=%u, styles=%u, ruby=%u, widths=%u)\n",
+            words.size(), wordXpos.size(), wordStyles.size(), rubyTexts.size(), tokenWidths.size());
     return false;
   }
 
   // Word data
   serialization::writePod(file, static_cast<uint16_t>(words.size()));
   for (const auto& w : words) serialization::writeString(file, w);
+  for (const auto& rubyText : rubyTexts) serialization::writeString(file, rubyText);
   for (auto x : wordXpos) serialization::writePod(file, x);
+  for (auto width : tokenWidths) serialization::writePod(file, width);
   for (auto s : wordStyles) serialization::writePod(file, s);
 
   // Style (alignment + margins/padding/indent)
@@ -74,7 +112,9 @@ bool TextBlock::serialize(FsFile& file) const {
 std::unique_ptr<TextBlock> TextBlock::deserialize(FsFile& file) {
   uint16_t wc;
   std::vector<std::string> words;
+  std::vector<std::string> rubyTexts;
   std::vector<int16_t> wordXpos;
+  std::vector<uint16_t> tokenWidths;
   std::vector<EpdFontFamily::Style> wordStyles;
   BlockStyle blockStyle;
 
@@ -89,10 +129,14 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(FsFile& file) {
 
   // Word data
   words.resize(wc);
+  rubyTexts.resize(wc);
   wordXpos.resize(wc);
+  tokenWidths.resize(wc);
   wordStyles.resize(wc);
   for (auto& w : words) serialization::readString(file, w);
+  for (auto& rubyText : rubyTexts) serialization::readString(file, rubyText);
   for (auto& x : wordXpos) serialization::readPod(file, x);
+  for (auto& width : tokenWidths) serialization::readPod(file, width);
   for (auto& s : wordStyles) serialization::readPod(file, s);
 
   // Style (alignment + margins/padding/indent)
@@ -110,5 +154,6 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(FsFile& file) {
   serialization::readPod(file, blockStyle.textIndentDefined);
 
   return std::unique_ptr<TextBlock>(
-      new TextBlock(std::move(words), std::move(wordXpos), std::move(wordStyles), blockStyle));
+      new TextBlock(std::move(words), std::move(rubyTexts), std::move(wordXpos), std::move(tokenWidths),
+                    std::move(wordStyles), blockStyle));
 }

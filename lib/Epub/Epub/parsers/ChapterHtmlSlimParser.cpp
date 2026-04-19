@@ -98,14 +98,11 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   }
 }
 
-// flush the contents of partWordBuffer to currentTextBlock
-void ChapterHtmlSlimParser::flushPartWordBuffer() {
-  // Determine font style from depth-based tracking and CSS effective style
+EpdFontFamily::Style ChapterHtmlSlimParser::currentFontStyle() const {
   const bool isBold = boldUntilDepth < depth || effectiveBold;
   const bool isItalic = italicUntilDepth < depth || effectiveItalic;
   const bool isUnderline = underlineUntilDepth < depth || effectiveUnderline;
 
-  // Combine style flags using bitwise OR
   EpdFontFamily::Style fontStyle = EpdFontFamily::REGULAR;
   if (isBold) {
     fontStyle = static_cast<EpdFontFamily::Style>(fontStyle | EpdFontFamily::BOLD);
@@ -116,12 +113,57 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   if (isUnderline) {
     fontStyle = static_cast<EpdFontFamily::Style>(fontStyle | EpdFontFamily::UNDERLINE);
   }
+  return fontStyle;
+}
 
+// flush the contents of partWordBuffer to currentTextBlock
+void ChapterHtmlSlimParser::flushPartWordBuffer() {
   // flush the buffer
   partWordBuffer[partWordBufferIndex] = '\0';
-  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
+  currentTextBlock->addWord(partWordBuffer, currentFontStyle(), false, nextWordContinues);
   partWordBufferIndex = 0;
   nextWordContinues = false;
+}
+
+void ChapterHtmlSlimParser::flushPendingRubySegment() {
+  if (rubyBaseBuffer.empty() && rubyTextBuffer.empty()) {
+    return;
+  }
+
+  if (!rubyBaseBuffer.empty()) {
+    rubySegments.emplace_back(std::move(rubyBaseBuffer), std::move(rubyTextBuffer));
+  }
+
+  rubyBaseBuffer.clear();
+  rubyTextBuffer.clear();
+}
+
+void ChapterHtmlSlimParser::flushRubyToTextBlock() {
+  if (!currentTextBlock) {
+    rubySegments.clear();
+    rubyBaseBuffer.clear();
+    rubyTextBuffer.clear();
+    return;
+  }
+
+  flushPendingRubySegment();
+
+  bool attachToPrevious = nextWordContinues;
+  for (auto& [baseText, rubyText] : rubySegments) {
+    if (baseText.empty()) {
+      continue;
+    }
+    currentTextBlock->addWord(std::move(baseText), currentFontStyle(), false, attachToPrevious, std::move(rubyText));
+    attachToPrevious = true;
+  }
+
+  if (!rubySegments.empty()) {
+    nextWordContinues = true;
+  }
+
+  rubySegments.clear();
+  rubyBaseBuffer.clear();
+  rubyTextBuffer.clear();
 }
 
 // start a new text block if needed
@@ -197,6 +239,43 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // Skip elements with display:none before all fast paths (tables, links, etc.).
   if (cssStyle.hasDisplay() && cssStyle.display == CssDisplay::None) {
     self->skipUntilDepth = self->depth;
+    self->depth += 1;
+    return;
+  }
+
+  if (strcmp(name, "ruby") == 0) {
+    if (self->partWordBufferIndex > 0) {
+      self->flushPartWordBuffer();
+      self->nextWordContinues = true;
+    }
+    self->insideRuby = true;
+    self->insideRubyText = false;
+    self->insideRubyFallbackParen = false;
+    self->rubyBaseBuffer.clear();
+    self->rubyTextBuffer.clear();
+    self->rubySegments.clear();
+    self->depth += 1;
+    return;
+  }
+
+  if (self->insideRuby && strcmp(name, "rt") == 0) {
+    self->insideRubyText = true;
+    self->insideRubyFallbackParen = false;
+    self->rubyTextBuffer.clear();
+    self->depth += 1;
+    return;
+  }
+
+  if (self->insideRuby && strcmp(name, "rb") == 0) {
+    self->flushPendingRubySegment();
+    self->insideRubyText = false;
+    self->insideRubyFallbackParen = false;
+    self->depth += 1;
+    return;
+  }
+
+  if (self->insideRuby && strcmp(name, "rp") == 0) {
+    self->insideRubyFallbackParen = true;
     self->depth += 1;
     return;
   }
@@ -723,6 +802,17 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     self->currentFootnoteLinkText[self->currentFootnoteLinkTextLen] = '\0';
   }
 
+  if (self->insideRuby) {
+    if (!self->insideRubyFallbackParen) {
+      if (self->insideRubyText) {
+        self->rubyTextBuffer.append(s, len);
+      } else {
+        self->rubyBaseBuffer.append(s, len);
+      }
+    }
+    return;
+  }
+
   for (int i = 0; i < len; i++) {
     if (isWhitespace(s[i])) {
       // Currently looking at whitespace, if there's anything in the partWordBuffer, flush it
@@ -843,7 +933,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
                                         ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
                                         : self->viewportWidth;
     self->currentTextBlock->layoutAndExtractLines(
-        self->renderer, self->fontId, effectiveWidth,
+        self->renderer, self->fontId, self->rubyFontId, effectiveWidth,
         [self](const std::shared_ptr<TextBlock>& textBlock) { self->addLineToPage(textBlock); }, false);
   }
 }
@@ -866,6 +956,35 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+
+  if (self->insideRuby &&
+      (strcmp(name, "rt") == 0 || strcmp(name, "rb") == 0 || strcmp(name, "rp") == 0 || strcmp(name, "ruby") == 0)) {
+    self->depth -= 1;
+
+    if (strcmp(name, "rt") == 0) {
+      self->insideRubyText = false;
+      self->insideRubyFallbackParen = false;
+      self->flushPendingRubySegment();
+      return;
+    }
+
+    if (strcmp(name, "rp") == 0) {
+      self->insideRubyFallbackParen = false;
+      return;
+    }
+
+    if (strcmp(name, "rb") == 0) {
+      self->insideRubyText = false;
+      self->insideRubyFallbackParen = false;
+      return;
+    }
+
+    self->insideRuby = false;
+    self->insideRubyText = false;
+    self->insideRubyFallbackParen = false;
+    self->flushRubyToTextBlock();
+    return;
+  }
 
   // Check if any style state will change after we decrement depth
   // If so, we MUST flush the partWordBuffer with the CURRENT style first
@@ -1084,7 +1203,7 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 }
 
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
-  const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
+  const int lineHeight = line->getRenderedLineHeight(renderer, fontId, rubyFontId, lineCompression);
 
   if (!currentPage) {
     currentPage.reset(new Page());
@@ -1124,7 +1243,7 @@ void ChapterHtmlSlimParser::makePages() {
     currentPageNextY = 0;
   }
 
-  const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
+  const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
 
   // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
@@ -1141,7 +1260,7 @@ void ChapterHtmlSlimParser::makePages() {
       (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
 
   currentTextBlock->layoutAndExtractLines(
-      renderer, fontId, effectiveWidth,
+      renderer, fontId, rubyFontId, effectiveWidth,
       [this](const std::shared_ptr<TextBlock>& textBlock) { addLineToPage(textBlock); });
 
   // Fallback: transfer any remaining pending footnotes to current page.

@@ -14,6 +14,7 @@ class GfxRenderer;
 
 class ParsedText {
   std::vector<std::string> words;
+  std::vector<std::string> rubyTexts;
   std::vector<EpdFontFamily::Style> wordStyles;
   std::vector<bool> wordContinues;  // true = word attaches to previous (no space before it)
   BlockStyle blockStyle;
@@ -32,9 +33,10 @@ class ParsedText {
   void extractLine(size_t breakIndex, int pageWidth, const std::vector<uint16_t>& wordWidths,
                    const std::vector<bool>& continuesVec, const std::vector<size_t>& lineBreakIndices,
                    const std::function<void(std::shared_ptr<TextBlock>)>& processLine, const GfxRenderer& renderer,
-                   int fontId);
-  std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId);
-  void layoutCharacterWrap(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth, int spaceWidth,
+                   int fontId, int rubyFontId);
+  std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId, int rubyFontId);
+  void layoutCharacterWrap(const GfxRenderer& renderer, int fontId, int rubyFontId, uint16_t viewportWidth,
+                           int spaceWidth,
                            const std::function<void(std::shared_ptr<TextBlock>)>& processLine, bool includeLastLine);
 
  public:
@@ -47,12 +49,13 @@ class ParsedText {
         hyphenationEnabled(hyphenationEnabled) {}
   ~ParsedText() = default;
 
-  void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false);
+  void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
+               std::string rubyText = "");
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
-  void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
+  void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, int rubyFontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
                              bool includeLastLine = true);
 };

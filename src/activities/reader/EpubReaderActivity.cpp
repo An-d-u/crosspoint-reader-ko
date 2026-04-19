@@ -722,7 +722,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Font prewarm: scan pass accumulates text, then prewarm, then real render
   const uint32_t heapBefore = esp_get_free_heap_size();
   auto scope = fcm->createPrewarmScope();
-  page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);  // scan pass
+  page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop);  // scan pass
   scope.endScanAndPrewarm();
   const uint32_t heapAfter = esp_get_free_heap_size();
   fcm->logStats("prewarm");
@@ -734,7 +734,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Force special handling for pages with images when anti-aliasing is on
   bool imagePageWithAA = page->hasImages() && SETTINGS.textAntiAliasing;
 
-  page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
+  page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop);
   renderStatusBar();
   fcm->logStats("bw_render");
   const auto tBwRender = millis();
@@ -752,7 +752,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
       // Re-render page content to restore images into the blanked area
       // Status bar is not re-rendered here to avoid reading stale dynamic values (e.g. battery %)
-      page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
+      page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop);
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     } else {
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -772,14 +772,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   if (SETTINGS.textAntiAliasing) {
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-    page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
+    page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop);
     renderer.copyGrayscaleLsbBuffers();
     const auto tGrayLsb = millis();
 
     // Render and copy to MSB buffer
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-    page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
+    page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop);
     renderer.copyGrayscaleMsbBuffers();
     const auto tGrayMsb = millis();
 

@@ -8,10 +8,11 @@
 #include "Page.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
+#include "../../../src/fontIds.h"
 
 namespace {
 constexpr uint8_t SECTION_FILE_VERSION =
-    21;  // Korean (paragraphIndent/characterWrap) + upstream (imageRendering, anchor map)
+    22;  // Korean + upstream + ruby text serialization/layout support
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) +
                                  sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint32_t) +
@@ -224,8 +225,8 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   }
 
   ChapterHtmlSlimParser visitor(
-      epub, tmpHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, paragraphIndent, paragraphAlignment,
-      characterWrap, viewportWidth, viewportHeight, hyphenationEnabled,
+      epub, tmpHtmlPath, renderer, fontId, UI_FONT_ID, lineCompression, extraParagraphSpacing, paragraphIndent,
+      paragraphAlignment, characterWrap, viewportWidth, viewportHeight, hyphenationEnabled,
       [this, &lut](std::unique_ptr<Page> page) { lut.emplace_back(this->onPageComplete(std::move(page))); },
       embeddedStyle, contentBase, imageBasePath, imageRendering, popupFn, cssParser);
   Hyphenator::setPreferredLanguage(epub->getLanguage());

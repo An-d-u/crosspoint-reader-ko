@@ -41,6 +41,7 @@ class ChapterHtmlSlimParser {
   std::unique_ptr<Page> currentPage = nullptr;
   int16_t currentPageNextY = 0;
   int fontId;
+  int rubyFontId;
   float lineCompression;
   bool extraParagraphSpacing;
   bool paragraphIndent;
@@ -85,10 +86,19 @@ class ChapterHtmlSlimParser {
   char currentFootnoteLinkHref[64] = {};
   std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes;  // <wordIndex, entry>
   int wordsExtractedInBlock = 0;
+  bool insideRuby = false;
+  bool insideRubyText = false;
+  bool insideRubyFallbackParen = false;
+  std::string rubyBaseBuffer;
+  std::string rubyTextBuffer;
+  std::vector<std::pair<std::string, std::string>> rubySegments;
 
   void updateEffectiveInlineStyle();
+  EpdFontFamily::Style currentFontStyle() const;
   void startNewTextBlock(const BlockStyle& blockStyle);
   void flushPartWordBuffer();
+  void flushPendingRubySegment();
+  void flushRubyToTextBlock();
   void makePages();
   // XML callbacks
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);
@@ -98,9 +108,10 @@ class ChapterHtmlSlimParser {
 
  public:
   explicit ChapterHtmlSlimParser(std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer,
-                                 const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                                 const bool paragraphIndent, const uint8_t paragraphAlignment, const bool characterWrap,
-                                 const uint16_t viewportWidth, const uint16_t viewportHeight,
+                                 const int fontId, const int rubyFontId, const float lineCompression,
+                                 const bool extraParagraphSpacing, const bool paragraphIndent,
+                                 const uint8_t paragraphAlignment, const bool characterWrap, const uint16_t viewportWidth,
+                                 const uint16_t viewportHeight,
                                  const bool hyphenationEnabled,
                                  const std::function<void(std::unique_ptr<Page>)>& completePageFn,
                                  const bool embeddedStyle, const std::string& contentBase,
@@ -111,6 +122,7 @@ class ChapterHtmlSlimParser {
         filepath(filepath),
         renderer(renderer),
         fontId(fontId),
+        rubyFontId(rubyFontId),
         lineCompression(lineCompression),
         extraParagraphSpacing(extraParagraphSpacing),
         paragraphIndent(paragraphIndent),
