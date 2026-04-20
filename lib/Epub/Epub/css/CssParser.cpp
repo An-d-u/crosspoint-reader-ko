@@ -41,6 +41,17 @@ constexpr size_t READ_BUFFER_SIZE = 512;
 // Prevents unbounded memory growth from pathological CSS files
 constexpr size_t MAX_RULES = 1500;
 
+// Minimum largest-contiguous heap block required to keep inserting rules.
+// Stop CSS parsing when the biggest contiguous block drops below this so
+// the rest of the book pipeline still has room: the ZIP inflate state for
+// extracting section contents needs ~32 KB contiguous, plus e-ink grayscale
+// passes want ~8 KB chunks. Some EPUBs (e.g. auto-generated .lhNN / .mbNN
+// ladder CSS from Yes24-style pipelines) otherwise eat the whole heap and
+// first-page renders but page turns fail with "Failed to init inflate
+// reader" + abort() on bad_alloc (exceptions disabled). Partial CSS is
+// better than an unusable book.
+constexpr size_t MIN_MAX_ALLOC_FOR_INSERT = 48 * 1024;
+
 // Minimum free heap required to apply CSS during rendering
 // If below this threshold, we skip CSS to avoid display artifacts.
 constexpr size_t MIN_FREE_HEAP_FOR_CSS = 48 * 1024;
@@ -375,6 +386,16 @@ void CssParser::processRuleBlockWithStyle(const std::string& selectorGroup, cons
   // Check if we've reached the rule limit before processing
   if (rulesBySelector_.size() >= MAX_RULES) {
     LOG_DBG("CSS", "Reached max rules limit (%zu), stopping CSS parsing", MAX_RULES);
+    return;
+  }
+
+  // Bail out if the heap is too fragmented to keep inserting without
+  // starving the page-load pipeline. Without this, pathological
+  // auto-generated CSS (hundreds of .lhNN/.mbNN classes) eats the heap and
+  // later ZIP-inflate / grayscale allocations fail. Check every 8 rules.
+  if ((rulesBySelector_.size() & 0x7) == 0 && ESP.getMaxAllocHeap() < MIN_MAX_ALLOC_FOR_INSERT) {
+    LOG_ERR("CSS", "MaxAlloc %u below safe threshold after %zu rules, stopping", ESP.getMaxAllocHeap(),
+            rulesBySelector_.size());
     return;
   }
 
@@ -903,6 +924,14 @@ bool CssParser::loadFromCache() {
     style.defined.imageWidth = (definedBits & 1 << 14) != 0;
     style.defined.display = (definedBits & 1 << 15) != 0;
 
+    // Same heap-safety check as during initial parse: stop loading rules when
+    // the largest contiguous block drops below the threshold so page turns
+    // (ZIP inflate ~32 KB + grayscale chunks ~8 KB) still have headroom.
+    if ((rulesBySelector_.size() & 0x7) == 0 && ESP.getMaxAllocHeap() < MIN_MAX_ALLOC_FOR_INSERT) {
+      LOG_ERR("CSS", "MaxAlloc %u below safe threshold after %zu rules, stopping cache load",
+              ESP.getMaxAllocHeap(), rulesBySelector_.size());
+      return true;  // Partial load is better than failing outright.
+    }
     rulesBySelector_[selector] = style;
   }
 
