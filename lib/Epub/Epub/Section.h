@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "Epub.h"
 
@@ -15,6 +16,7 @@ class Section {
   GfxRenderer& renderer;
   std::string filePath;
   FsFile file;
+  std::vector<uint32_t> pagePositions;
 
   void writeSectionFileHeader(int fontId, float lineCompression, bool extraParagraphSpacing, bool paragraphIndent,
                               uint8_t paragraphAlignment, bool characterWrap, uint16_t viewportWidth,
@@ -35,7 +37,7 @@ class Section {
   bool loadSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, bool paragraphIndent,
                        uint8_t paragraphAlignment, bool characterWrap, uint16_t viewportWidth, uint16_t viewportHeight,
                        bool hyphenationEnabled, bool embeddedStyle, uint8_t imageRendering);
-  bool clearCache() const;
+  bool clearCache();
   bool createSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, bool paragraphIndent,
                          uint8_t paragraphAlignment, bool characterWrap, uint16_t viewportWidth,
                          uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle, uint8_t imageRendering,

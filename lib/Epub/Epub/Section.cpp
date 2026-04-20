@@ -72,6 +72,7 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
                               const bool paragraphIndent, const uint8_t paragraphAlignment, const bool characterWrap,
                               const uint16_t viewportWidth, const uint16_t viewportHeight,
                               const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering) {
+  pagePositions.clear();
   if (!Storage.openFileForRead("SCT", filePath, file)) {
     return false;
   }
@@ -128,6 +129,24 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
   }
 
   serialization::readPod(file, pageCount);
+  uint32_t lutOffset;
+  serialization::readPod(file, lutOffset);
+
+  if (pageCount > 0) {
+    pagePositions.resize(pageCount);
+    file.seek(lutOffset);
+    for (uint16_t i = 0; i < pageCount; i++) {
+      serialization::readPod(file, pagePositions[i]);
+      if (pagePositions[i] == 0) {
+        file.close();
+        pagePositions.clear();
+        LOG_ERR("SCT", "Deserialization failed: Invalid page LUT entry %u", i);
+        clearCache();
+        return false;
+      }
+    }
+  }
+
   // Explicit close() required: member variable persists beyond function scope
   file.close();
   LOG_DBG("SCT", "Deserialization succeeded: %d pages", pageCount);
@@ -135,7 +154,8 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
 }
 
 // Your updated class method (assuming you are using the 'SD' object, which is a wrapper for a specific filesystem)
-bool Section::clearCache() const {
+bool Section::clearCache() {
+  pagePositions.clear();
   if (!Storage.exists(filePath.c_str())) {
     LOG_DBG("SCT", "Cache does not exist, no action needed");
     return true;
@@ -155,6 +175,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                                 const uint16_t viewportWidth, const uint16_t viewportHeight,
                                 const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering,
                                 const std::function<void()>& popupFn) {
+  pagePositions.clear();
   const auto localPath = epub->getSpineItem(spineIndex).href;
   const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_" + std::to_string(spineIndex) + ".html";
 
@@ -279,6 +300,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   serialization::writePod(file, anchorMapOffset);
   // Explicit close() required: member variable persists beyond function scope
   file.close();
+  pagePositions = std::move(lut);
   if (cssParser) {
     cssParser->clear();
   }
@@ -295,16 +317,17 @@ std::unique_ptr<Page> Section::loadPageFromSectionFile(const int pageNumber) {
     return nullptr;
   }
 
+  if (pagePositions.size() != pageCount) {
+    LOG_ERR("SCT", "Page LUT missing or size mismatch (have %u, expected %u)",
+            static_cast<unsigned>(pagePositions.size()), static_cast<unsigned>(pageCount));
+    return nullptr;
+  }
+
   if (!Storage.openFileForRead("SCT", filePath, file)) {
     return nullptr;
   }
 
-  file.seek(HEADER_SIZE - sizeof(uint32_t) * 2);
-  uint32_t lutOffset;
-  serialization::readPod(file, lutOffset);
-  file.seek(lutOffset + sizeof(uint32_t) * pageNumber);
-  uint32_t pagePos;
-  serialization::readPod(file, pagePos);
+  const uint32_t pagePos = pagePositions[pageNumber];
   file.seek(pagePos);
 
   auto page = Page::deserialize(file);
