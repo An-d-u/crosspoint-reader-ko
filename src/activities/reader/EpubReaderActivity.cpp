@@ -43,6 +43,40 @@ int clampPercent(int percent) {
 
 }  // namespace
 
+void EpubReaderActivity::clearPrefetchedPage() {
+  prefetchedPage.reset();
+  prefetchedSpineIndex = -1;
+  prefetchedPageNumber = -1;
+}
+
+void EpubReaderActivity::prefetchNextPage() {
+  if (!section) {
+    clearPrefetchedPage();
+    return;
+  }
+
+  const int nextPage = section->currentPage + 1;
+  if (nextPage < 0 || nextPage >= section->pageCount) {
+    clearPrefetchedPage();
+    return;
+  }
+
+  if (prefetchedPage && prefetchedSpineIndex == currentSpineIndex && prefetchedPageNumber == nextPage) {
+    return;
+  }
+
+  auto next = section->loadPageFromSectionFile(nextPage);
+  if (!next) {
+    clearPrefetchedPage();
+    return;
+  }
+
+  prefetchedPage = std::move(next);
+  prefetchedSpineIndex = currentSpineIndex;
+  prefetchedPageNumber = nextPage;
+  LOG_DBG("ERS", "Prefetched page %d in spine %d", prefetchedPageNumber, prefetchedSpineIndex);
+}
+
 void EpubReaderActivity::onEnter() {
   Activity::onEnter();
 
@@ -100,6 +134,7 @@ void EpubReaderActivity::onExit() {
 
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
+  clearPrefetchedPage();
   section.reset();
   epub.reset();
 }
@@ -209,6 +244,7 @@ void EpubReaderActivity::loop() {
       RenderLock lock(*this);
       nextPageNumber = 0;
       currentSpineIndex = nextTriggered ? currentSpineIndex + 1 : currentSpineIndex - 1;
+      clearPrefetchedPage();
       section.reset();
     }
     requestUpdate();
@@ -287,6 +323,7 @@ void EpubReaderActivity::jumpToPercent(int percent) {
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
     pendingPercentJump = true;
+    clearPrefetchedPage();
     section.reset();
   }
 }
@@ -303,6 +340,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               RenderLock lock(*this);
               currentSpineIndex = std::get<ChapterResult>(result.data).spineIndex;
               nextPageNumber = 0;
+              clearPrefetchedPage();
               section.reset();
             }
           });
@@ -374,6 +412,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           uint16_t backupSpine = currentSpineIndex;
           uint16_t backupPage = section->currentPage;
           uint16_t backupPageCount = section->pageCount;
+          clearPrefetchedPage();
           section.reset();
           epub->clearCache();
           epub->setupCacheDir();
@@ -405,6 +444,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                   RenderLock lock(*this);
                   currentSpineIndex = sync.spineIndex;
                   nextPageNumber = sync.page;
+                  clearPrefetchedPage();
                   section.reset();
                 }
               }
@@ -438,6 +478,7 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
     ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
 
     // Reset section to force re-layout in the new orientation.
+    clearPrefetchedPage();
     section.reset();
   }
 }
@@ -463,6 +504,7 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
       cachedChapterTotalPageCount = section->pageCount;
       nextPageNumber = section->currentPage;
     }
+    clearPrefetchedPage();
     section.reset();
   }
 }
@@ -477,6 +519,7 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
         RenderLock lock(*this);
         nextPageNumber = 0;
         currentSpineIndex++;
+        clearPrefetchedPage();
         section.reset();
       }
     }
@@ -489,6 +532,7 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
         RenderLock lock(*this);
         nextPageNumber = UINT16_MAX;
         currentSpineIndex--;
+        clearPrefetchedPage();
         section.reset();
       }
     }
@@ -507,6 +551,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   const int currentFontId = SETTINGS.getReaderFontId();
   if (cachedFontId != 0 && cachedFontId != currentFontId) {
     LOG_DBG("ERS", "Font changed from %d to %d, invalidating section", cachedFontId, currentFontId);
+    clearPrefetchedPage();
     section.reset();
   }
   cachedFontId = currentFontId;
@@ -521,6 +566,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             epub->getSpineItemsCount());
     currentSpineIndex = 0;
     nextPageNumber = 0;
+    clearPrefetchedPage();
     section.reset();
   }
 
@@ -574,6 +620,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
               SETTINGS.paragraphIndent, SETTINGS.paragraphAlignment, SETTINGS.characterWrap, viewportWidth,
               viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering, popupFn)) {
         LOG_ERR("ERS", "Failed to persist page data to SD");
+        clearPrefetchedPage();
         section.reset();
         return;
       }
@@ -637,9 +684,18 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   }
 
   {
-    auto p = section->loadPageFromSectionFile();
+    std::unique_ptr<Page> p;
+    if (prefetchedPage && prefetchedSpineIndex == currentSpineIndex && prefetchedPageNumber == section->currentPage) {
+      p = std::move(prefetchedPage);
+      prefetchedPageNumber = -1;
+      prefetchedSpineIndex = -1;
+      LOG_DBG("ERS", "Using prefetched page %d in spine %d", section->currentPage, currentSpineIndex);
+    } else {
+      p = section->loadPageFromSectionFile();
+    }
     if (!p) {
       LOG_ERR("ERS", "Failed to load page from SD - clearing section cache");
+      clearPrefetchedPage();
       section->clearCache();
       section.reset();
       requestUpdate();  // Try again after clearing cache
@@ -655,6 +711,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
   }
+  prefetchNextPage();
   silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
   saveProgress(currentSpineIndex, section->currentPage, section->pageCount);
 
@@ -891,6 +948,7 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
     pendingAnchor = std::move(anchor);
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
+    clearPrefetchedPage();
     section.reset();
   }
   requestUpdate();
@@ -907,6 +965,7 @@ void EpubReaderActivity::restoreSavedPosition() {
     RenderLock lock(*this);
     currentSpineIndex = pos.spineIndex;
     nextPageNumber = pos.pageNumber;
+    clearPrefetchedPage();
     section.reset();
   }
   requestUpdate();

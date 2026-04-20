@@ -1,6 +1,7 @@
 #pragma once
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
+#include <Epub/Page.h>
 #include <Epub/Section.h>
 
 #include "EpubReaderMenuActivity.h"
@@ -28,6 +29,9 @@ class EpubReaderActivity final : public Activity {
   bool pendingScreenshot = false;
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   bool automaticPageTurnActive = false;
+  int prefetchedSpineIndex = -1;
+  int prefetchedPageNumber = -1;
+  std::unique_ptr<Page> prefetchedPage = nullptr;
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
@@ -50,6 +54,8 @@ class EpubReaderActivity final : public Activity {
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void pageTurn(bool isForwardTurn);
+  void clearPrefetchedPage();
+  void prefetchNextPage();
 
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
