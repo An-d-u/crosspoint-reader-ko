@@ -3,6 +3,7 @@
 #include <expat.h>
 
 #include <climits>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -92,6 +93,12 @@ class ChapterHtmlSlimParser {
   std::string rubyBaseBuffer;
   std::string rubyTextBuffer;
   std::vector<std::pair<std::string, std::string>> rubySegments;
+  bool insideSvgWrapper = false;
+  int svgWrapperDepth = -1;
+  bool svgWrapperHandledImage = false;
+  int svgWrapperWidth = -1;
+  int svgWrapperHeight = -1;
+  float svgWrapperAspectRatio = 0.0f;
 
   void updateEffectiveInlineStyle();
   EpdFontFamily::Style currentFontStyle() const;
@@ -100,6 +107,9 @@ class ChapterHtmlSlimParser {
   void flushPendingRubySegment();
   void flushRubyToTextBlock();
   void makePages();
+  bool tryHandleRasterImage(const std::string& rawHref, const std::string& alt, const std::string& classAttr,
+                            const std::string& styleAttr, int hintedWidth = -1, int hintedHeight = -1,
+                            float hintedAspectRatio = 0.0f);
   // XML callbacks
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);
   static void XMLCALL characterData(void* userData, const XML_Char* s, int len);

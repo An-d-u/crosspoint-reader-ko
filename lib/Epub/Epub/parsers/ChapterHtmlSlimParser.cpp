@@ -1,10 +1,14 @@
 #include "ChapterHtmlSlimParser.h"
 
+#include <cmath>
+#include <cstdlib>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Utf8.h>
+#include <algorithm>
+#include <cstring>
 #include <expat.h>
 
 #include "../../Epub.h"
@@ -39,6 +43,100 @@ const char* SKIP_TAGS[] = {"head"};
 constexpr int NUM_SKIP_TAGS = sizeof(SKIP_TAGS) / sizeof(SKIP_TAGS[0]);
 
 bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t'; }
+
+const char* getLocalName(const char* qName) {
+  if (!qName) return "";
+  const char* colon = strrchr(qName, ':');
+  return colon ? colon + 1 : qName;
+}
+
+bool tagLocalEquals(const char* qName, const char* expected) { return strcmp(getLocalName(qName), expected) == 0; }
+
+const char* getAttributeLocal(const XML_Char** atts, const char* localName) {
+  if (!atts) return nullptr;
+  for (int i = 0; atts[i]; i += 2) {
+    if (strcmp(getLocalName(atts[i]), localName) == 0) {
+      return atts[i + 1];
+    }
+  }
+  return nullptr;
+}
+
+bool parseSvgLengthPx(const char* text, int& outPx) {
+  if (!text || text[0] == '\0') return false;
+
+  char* end = nullptr;
+  const float value = strtof(text, &end);
+  if (end == text || !std::isfinite(value) || value <= 0.0f) {
+    return false;
+  }
+
+  while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') {
+    ++end;
+  }
+
+  // Performance-first implementation: support unitless and px only.
+  if (*end != '\0' && strcmp(end, "px") != 0) {
+    return false;
+  }
+
+  outPx = std::max(1, static_cast<int>(std::lround(value)));
+  return true;
+}
+
+bool parseViewBoxAspectRatio(const char* text, float& outAspectRatio) {
+  if (!text || text[0] == '\0') return false;
+
+  const char* cursor = text;
+  float values[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+  for (float& value : values) {
+    while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n' || *cursor == ',') {
+      ++cursor;
+    }
+
+    char* end = nullptr;
+    value = strtof(cursor, &end);
+    if (end == cursor || !std::isfinite(value)) {
+      return false;
+    }
+    cursor = end;
+  }
+
+  const float width = values[2];
+  const float height = values[3];
+  if (width <= 0.0f || height <= 0.0f) {
+    return false;
+  }
+
+  outAspectRatio = width / height;
+  return std::isfinite(outAspectRatio) && outAspectRatio > 0.0f;
+}
+
+void clampSizeToViewport(int& width, int& height, const int viewportWidth, const int viewportHeight,
+                         const float aspectRatio) {
+  if (width < 1) width = 1;
+  if (height < 1) height = 1;
+
+  if (width > viewportWidth || height > viewportHeight) {
+    const float scaleX = (width > viewportWidth) ? static_cast<float>(viewportWidth) / width : 1.0f;
+    const float scaleY = (height > viewportHeight) ? static_cast<float>(viewportHeight) / height : 1.0f;
+    const float scale = std::min(scaleX, scaleY);
+    width = std::max(1, static_cast<int>(std::lround(width * scale)));
+    height = std::max(1, static_cast<int>(std::lround(height * scale)));
+  }
+
+  if (aspectRatio > 0.0f) {
+    if (width > viewportWidth) {
+      width = viewportWidth;
+      height = std::max(1, static_cast<int>(std::lround(width / aspectRatio)));
+    }
+    if (height > viewportHeight) {
+      height = viewportHeight;
+      width = std::max(1, static_cast<int>(std::lround(height * aspectRatio)));
+    }
+  }
+}
 
 // given the start and end of a tag, check to see if it matches a known tag
 bool matches(const char* tag_name, const char* possible_tags[], const int possible_tag_count) {
@@ -196,11 +294,168 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   wordsExtractedInBlock = 0;
 }
 
+bool ChapterHtmlSlimParser::tryHandleRasterImage(const std::string& rawHref, const std::string& alt,
+                                                 const std::string& classAttr, const std::string& styleAttr,
+                                                 const int hintedWidth, const int hintedHeight,
+                                                 const float hintedAspectRatio) {
+  (void)alt;
+
+  if (rawHref.empty() || imageRendering == 1) {
+    return false;
+  }
+
+  LOG_DBG("EHP", "Found image: src=%s", rawHref.c_str());
+
+  const std::string resolvedPath = FsHelpers::normalisePath(contentBase + rawHref);
+  if (!ImageDecoderFactory::isFormatSupported(resolvedPath)) {
+    LOG_DBG("EHP", "Unsupported image format for %s", resolvedPath.c_str());
+    return false;
+  }
+
+  std::string ext;
+  const size_t extPos = resolvedPath.rfind('.');
+  if (extPos != std::string::npos) {
+    ext = resolvedPath.substr(extPos);
+  }
+  const std::string cachedImagePath = imageBasePath + std::to_string(imageCounter++) + ext;
+
+  FsFile cachedImageFile;
+  bool extractSuccess = false;
+  if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
+    extractSuccess = epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
+    cachedImageFile.flush();
+    cachedImageFile.close();
+    delay(50);  // Give SD card time to sync
+  }
+
+  if (!extractSuccess) {
+    LOG_ERR("EHP", "Failed to extract image");
+    return false;
+  }
+
+  ImageDimensions dims = {0, 0};
+  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedImagePath);
+  if (!decoder || !decoder->getDimensions(cachedImagePath, dims)) {
+    LOG_ERR("EHP", "Failed to get image dimensions");
+    Storage.remove(cachedImagePath.c_str());
+    return false;
+  }
+
+  LOG_DBG("EHP", "Image dimensions: %dx%d", dims.width, dims.height);
+
+  int displayWidth = 0;
+  int displayHeight = 0;
+  const float intrinsicAspect =
+      (dims.width > 0 && dims.height > 0) ? static_cast<float>(dims.width) / dims.height : 1.0f;
+  const float preferredAspect = (hintedAspectRatio > 0.0f) ? hintedAspectRatio : intrinsicAspect;
+  const float emSize = static_cast<float>(renderer.getFontAscenderSize(fontId));
+  CssStyle imgStyle = cssParser ? cssParser->resolveStyle("img", classAttr) : CssStyle{};
+  if (!styleAttr.empty()) {
+    imgStyle.applyOver(CssParser::parseInlineStyle(styleAttr));
+  }
+  const bool hasCssHeight = imgStyle.hasImageHeight();
+  const bool hasCssWidth = imgStyle.hasImageWidth();
+
+  if (hasCssHeight && hasCssWidth && dims.width > 0 && dims.height > 0) {
+    displayHeight = static_cast<int>(imgStyle.imageHeight.toPixels(emSize, static_cast<float>(viewportHeight)) + 0.5f);
+    displayWidth = static_cast<int>(imgStyle.imageWidth.toPixels(emSize, static_cast<float>(viewportWidth)) + 0.5f);
+    clampSizeToViewport(displayWidth, displayHeight, viewportWidth, viewportHeight,
+                        (displayHeight > 0) ? static_cast<float>(displayWidth) / displayHeight : preferredAspect);
+    LOG_DBG("EHP", "Display size from CSS height+width: %dx%d", displayWidth, displayHeight);
+  } else if (hasCssHeight && !hasCssWidth && dims.width > 0 && dims.height > 0) {
+    displayHeight = static_cast<int>(imgStyle.imageHeight.toPixels(emSize, static_cast<float>(viewportHeight)) + 0.5f);
+    displayHeight = std::max(1, displayHeight);
+    displayWidth = static_cast<int>(displayHeight * intrinsicAspect + 0.5f);
+    clampSizeToViewport(displayWidth, displayHeight, viewportWidth, viewportHeight, intrinsicAspect);
+    LOG_DBG("EHP", "Display size from CSS height: %dx%d", displayWidth, displayHeight);
+  } else if (hasCssWidth && !hasCssHeight && dims.width > 0 && dims.height > 0) {
+    displayWidth = static_cast<int>(imgStyle.imageWidth.toPixels(emSize, static_cast<float>(viewportWidth)) + 0.5f);
+    displayWidth = std::max(1, displayWidth);
+    displayHeight = static_cast<int>(displayWidth * (static_cast<float>(dims.height) / dims.width) + 0.5f);
+    clampSizeToViewport(displayWidth, displayHeight, viewportWidth, viewportHeight, intrinsicAspect);
+    LOG_DBG("EHP", "Display size from CSS width: %dx%d", displayWidth, displayHeight);
+  } else if (hintedWidth > 0 && hintedHeight > 0) {
+    displayWidth = hintedWidth;
+    displayHeight = hintedHeight;
+    clampSizeToViewport(displayWidth, displayHeight, viewportWidth, viewportHeight,
+                        static_cast<float>(hintedWidth) / hintedHeight);
+    LOG_DBG("EHP", "Display size from SVG width+height: %dx%d", displayWidth, displayHeight);
+  } else if (hintedHeight > 0) {
+    displayHeight = hintedHeight;
+    displayWidth = std::max(1, static_cast<int>(displayHeight * preferredAspect + 0.5f));
+    clampSizeToViewport(displayWidth, displayHeight, viewportWidth, viewportHeight, preferredAspect);
+    LOG_DBG("EHP", "Display size from SVG height: %dx%d", displayWidth, displayHeight);
+  } else if (hintedWidth > 0) {
+    displayWidth = hintedWidth;
+    displayHeight = std::max(1, static_cast<int>(displayWidth / preferredAspect + 0.5f));
+    clampSizeToViewport(displayWidth, displayHeight, viewportWidth, viewportHeight, preferredAspect);
+    LOG_DBG("EHP", "Display size from SVG width: %dx%d", displayWidth, displayHeight);
+  } else {
+    int maxWidth = viewportWidth;
+    int maxHeight = viewportHeight;
+    const float scaleX = (dims.width > maxWidth) ? static_cast<float>(maxWidth) / dims.width : 1.0f;
+    const float scaleY = (dims.height > maxHeight) ? static_cast<float>(maxHeight) / dims.height : 1.0f;
+    float scale = std::min(scaleX, scaleY);
+    if (scale > 1.0f) scale = 1.0f;
+
+    displayWidth = std::max(1, static_cast<int>(dims.width * scale));
+    displayHeight = std::max(1, static_cast<int>(dims.height * scale));
+    LOG_DBG("EHP", "Display size: %dx%d (scale %.2f)", displayWidth, displayHeight, scale);
+  }
+
+  if (partWordBufferIndex > 0) {
+    flushPartWordBuffer();
+  }
+  if (currentTextBlock && !currentTextBlock->isEmpty()) {
+    const BlockStyle parentBlockStyle = currentTextBlock->getBlockStyle();
+    startNewTextBlock(parentBlockStyle);
+  }
+
+  if (currentPage && !currentPage->elements.empty() && (currentPageNextY + displayHeight > viewportHeight)) {
+    completePageFn(std::move(currentPage));
+    completedPageCount++;
+    currentPage.reset(new Page());
+    if (!currentPage) {
+      LOG_ERR("EHP", "Failed to create new page");
+      return false;
+    }
+    currentPageNextY = 0;
+  } else if (!currentPage) {
+    currentPage.reset(new Page());
+    if (!currentPage) {
+      LOG_ERR("EHP", "Failed to create initial page");
+      return false;
+    }
+    currentPageNextY = 0;
+  }
+
+  auto imageBlock = std::make_shared<ImageBlock>(cachedImagePath, displayWidth, displayHeight);
+  if (!imageBlock) {
+    LOG_ERR("EHP", "Failed to create ImageBlock");
+    return false;
+  }
+  const int xPos = (viewportWidth - displayWidth) / 2;
+  auto pageImage = std::make_shared<PageImage>(imageBlock, xPos, currentPageNextY);
+  if (!pageImage) {
+    LOG_ERR("EHP", "Failed to create PageImage");
+    return false;
+  }
+  currentPage->elements.push_back(pageImage);
+  currentPageNextY += displayHeight;
+  return true;
+}
+
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  const char* localName = getLocalName(name);
 
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
+    self->depth += 1;
+    return;
+  }
+
+  if (self->insideSvgWrapper && !tagLocalEquals(name, "image")) {
     self->depth += 1;
     return;
   }
@@ -229,7 +484,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // before tag-specific branches emit any content or metadata.
   CssStyle cssStyle;
   if (self->cssParser) {
-    cssStyle = self->cssParser->resolveStyle(name, classAttr);
+    cssStyle = self->cssParser->resolveStyle(localName, classAttr);
     if (!styleAttr.empty()) {
       CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);
       cssStyle.applyOver(inlineStyle);
@@ -243,7 +498,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     return;
   }
 
-  if (strcmp(name, "ruby") == 0) {
+  if (tagLocalEquals(name, "ruby")) {
     if (self->partWordBufferIndex > 0) {
       self->flushPartWordBuffer();
       self->nextWordContinues = true;
@@ -258,7 +513,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     return;
   }
 
-  if (self->insideRuby && strcmp(name, "rt") == 0) {
+  if (self->insideRuby && tagLocalEquals(name, "rt")) {
     self->insideRubyText = true;
     self->insideRubyFallbackParen = false;
     self->rubyTextBuffer.clear();
@@ -266,7 +521,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     return;
   }
 
-  if (self->insideRuby && strcmp(name, "rb") == 0) {
+  if (self->insideRuby && tagLocalEquals(name, "rb")) {
     self->flushPendingRubySegment();
     self->insideRubyText = false;
     self->insideRubyFallbackParen = false;
@@ -274,8 +529,64 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     return;
   }
 
-  if (self->insideRuby && strcmp(name, "rp") == 0) {
+  if (self->insideRuby && tagLocalEquals(name, "rp")) {
     self->insideRubyFallbackParen = true;
+    self->depth += 1;
+    return;
+  }
+
+  if (tagLocalEquals(name, "svg")) {
+    self->insideSvgWrapper = true;
+    self->svgWrapperDepth = self->depth;
+    self->svgWrapperHandledImage = false;
+    self->svgWrapperWidth = -1;
+    self->svgWrapperHeight = -1;
+    self->svgWrapperAspectRatio = 0.0f;
+
+    const char* svgWidth = getAttributeLocal(atts, "width");
+    const char* svgHeight = getAttributeLocal(atts, "height");
+    const char* viewBox = getAttributeLocal(atts, "viewBox");
+    if (svgWidth) {
+      parseSvgLengthPx(svgWidth, self->svgWrapperWidth);
+    }
+    if (svgHeight) {
+      parseSvgLengthPx(svgHeight, self->svgWrapperHeight);
+    }
+    if (viewBox) {
+      parseViewBoxAspectRatio(viewBox, self->svgWrapperAspectRatio);
+    }
+    if (self->svgWrapperAspectRatio <= 0.0f && self->svgWrapperWidth > 0 && self->svgWrapperHeight > 0) {
+      self->svgWrapperAspectRatio = static_cast<float>(self->svgWrapperWidth) / self->svgWrapperHeight;
+    }
+
+    self->depth += 1;
+    return;
+  }
+
+  if (self->insideSvgWrapper && tagLocalEquals(name, "image")) {
+    const char* imageHref = getAttributeLocal(atts, "href");
+    const char* imageWidth = getAttributeLocal(atts, "width");
+    const char* imageHeight = getAttributeLocal(atts, "height");
+
+    int hintedWidth = self->svgWrapperWidth;
+    int hintedHeight = self->svgWrapperHeight;
+    if (imageWidth) {
+      parseSvgLengthPx(imageWidth, hintedWidth);
+    }
+    if (imageHeight) {
+      parseSvgLengthPx(imageHeight, hintedHeight);
+    }
+
+    float hintedAspectRatio = self->svgWrapperAspectRatio;
+    if (hintedAspectRatio <= 0.0f && hintedWidth > 0 && hintedHeight > 0) {
+      hintedAspectRatio = static_cast<float>(hintedWidth) / hintedHeight;
+    }
+
+    if (!self->svgWrapperHandledImage && imageHref &&
+        self->tryHandleRasterImage(imageHref, "", "", "", hintedWidth, hintedHeight, hintedAspectRatio)) {
+      self->svgWrapperHandledImage = true;
+    }
+
     self->depth += 1;
     return;
   }
@@ -346,12 +657,18 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   if (matches(name, IMAGE_TAGS, NUM_IMAGE_TAGS)) {
     std::string src;
     std::string alt;
+    int hintedWidth = -1;
+    int hintedHeight = -1;
     if (atts != nullptr) {
       for (int i = 0; atts[i]; i += 2) {
         if (strcmp(atts[i], "src") == 0) {
           src = atts[i + 1];
         } else if (strcmp(atts[i], "alt") == 0) {
           alt = atts[i + 1];
+        } else if (strcmp(atts[i], "width") == 0) {
+          parseSvgLengthPx(atts[i + 1], hintedWidth);
+        } else if (strcmp(atts[i], "height") == 0) {
+          parseSvgLengthPx(atts[i + 1], hintedHeight);
         }
       }
 
@@ -375,181 +692,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         }
       }
 
-      if (!src.empty() && self->imageRendering != 1) {
-        LOG_DBG("EHP", "Found image: src=%s", src.c_str());
-
-        {
-          // Resolve the image path relative to the HTML file
-          std::string resolvedPath = FsHelpers::normalisePath(self->contentBase + src);
-
-          if (ImageDecoderFactory::isFormatSupported(resolvedPath)) {
-            // Create a unique filename for the cached image
-            std::string ext;
-            size_t extPos = resolvedPath.rfind('.');
-            if (extPos != std::string::npos) {
-              ext = resolvedPath.substr(extPos);
-            }
-            std::string cachedImagePath = self->imageBasePath + std::to_string(self->imageCounter++) + ext;
-
-            // Extract image to cache file
-            FsFile cachedImageFile;
-            bool extractSuccess = false;
-            if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
-              extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
-              cachedImageFile.flush();
-              cachedImageFile.close();
-              delay(50);  // Give SD card time to sync
-            }
-
-            if (extractSuccess) {
-              // Get image dimensions
-              ImageDimensions dims = {0, 0};
-              ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedImagePath);
-              if (decoder && decoder->getDimensions(cachedImagePath, dims)) {
-                LOG_DBG("EHP", "Image dimensions: %dx%d", dims.width, dims.height);
-
-                int displayWidth = 0;
-                int displayHeight = 0;
-                const float emSize = static_cast<float>(self->renderer.getFontAscenderSize(self->fontId));
-                CssStyle imgStyle = self->cssParser ? self->cssParser->resolveStyle("img", classAttr) : CssStyle{};
-                // Merge inline style (e.g. style="height: 2em") so it overrides stylesheet rules
-                if (!styleAttr.empty()) {
-                  imgStyle.applyOver(CssParser::parseInlineStyle(styleAttr));
-                }
-                const bool hasCssHeight = imgStyle.hasImageHeight();
-                const bool hasCssWidth = imgStyle.hasImageWidth();
-
-                if (hasCssHeight && hasCssWidth && dims.width > 0 && dims.height > 0) {
-                  // Both CSS height and width set: resolve both, then clamp to viewport preserving requested ratio
-                  displayHeight = static_cast<int>(
-                      imgStyle.imageHeight.toPixels(emSize, static_cast<float>(self->viewportHeight)) + 0.5f);
-                  displayWidth = static_cast<int>(
-                      imgStyle.imageWidth.toPixels(emSize, static_cast<float>(self->viewportWidth)) + 0.5f);
-                  if (displayHeight < 1) displayHeight = 1;
-                  if (displayWidth < 1) displayWidth = 1;
-                  if (displayWidth > self->viewportWidth || displayHeight > self->viewportHeight) {
-                    float scaleX = (displayWidth > self->viewportWidth)
-                                       ? static_cast<float>(self->viewportWidth) / displayWidth
-                                       : 1.0f;
-                    float scaleY = (displayHeight > self->viewportHeight)
-                                       ? static_cast<float>(self->viewportHeight) / displayHeight
-                                       : 1.0f;
-                    float scale = (scaleX < scaleY) ? scaleX : scaleY;
-                    displayWidth = static_cast<int>(displayWidth * scale + 0.5f);
-                    displayHeight = static_cast<int>(displayHeight * scale + 0.5f);
-                    if (displayWidth < 1) displayWidth = 1;
-                    if (displayHeight < 1) displayHeight = 1;
-                  }
-                  LOG_DBG("EHP", "Display size from CSS height+width: %dx%d", displayWidth, displayHeight);
-                } else if (hasCssHeight && !hasCssWidth && dims.width > 0 && dims.height > 0) {
-                  // Use CSS height (resolve % against viewport height) and derive width from aspect ratio
-                  displayHeight = static_cast<int>(
-                      imgStyle.imageHeight.toPixels(emSize, static_cast<float>(self->viewportHeight)) + 0.5f);
-                  if (displayHeight < 1) displayHeight = 1;
-                  displayWidth =
-                      static_cast<int>(displayHeight * (static_cast<float>(dims.width) / dims.height) + 0.5f);
-                  if (displayHeight > self->viewportHeight) {
-                    displayHeight = self->viewportHeight;
-                    // Rescale width to preserve aspect ratio when height is clamped
-                    displayWidth =
-                        static_cast<int>(displayHeight * (static_cast<float>(dims.width) / dims.height) + 0.5f);
-                    if (displayWidth < 1) displayWidth = 1;
-                  }
-                  if (displayWidth > self->viewportWidth) {
-                    displayWidth = self->viewportWidth;
-                    // Rescale height to preserve aspect ratio when width is clamped
-                    displayHeight =
-                        static_cast<int>(displayWidth * (static_cast<float>(dims.height) / dims.width) + 0.5f);
-                    if (displayHeight < 1) displayHeight = 1;
-                  }
-                  if (displayWidth < 1) displayWidth = 1;
-                  LOG_DBG("EHP", "Display size from CSS height: %dx%d", displayWidth, displayHeight);
-                } else if (hasCssWidth && !hasCssHeight && dims.width > 0 && dims.height > 0) {
-                  // Use CSS width (resolve % against viewport width) and derive height from aspect ratio
-                  displayWidth = static_cast<int>(
-                      imgStyle.imageWidth.toPixels(emSize, static_cast<float>(self->viewportWidth)) + 0.5f);
-                  if (displayWidth > self->viewportWidth) displayWidth = self->viewportWidth;
-                  if (displayWidth < 1) displayWidth = 1;
-                  displayHeight =
-                      static_cast<int>(displayWidth * (static_cast<float>(dims.height) / dims.width) + 0.5f);
-                  if (displayHeight > self->viewportHeight) {
-                    displayHeight = self->viewportHeight;
-                    // Rescale width to preserve aspect ratio when height is clamped
-                    displayWidth =
-                        static_cast<int>(displayHeight * (static_cast<float>(dims.width) / dims.height) + 0.5f);
-                    if (displayWidth < 1) displayWidth = 1;
-                  }
-                  if (displayHeight < 1) displayHeight = 1;
-                  LOG_DBG("EHP", "Display size from CSS width: %dx%d", displayWidth, displayHeight);
-                } else {
-                  // Scale to fit viewport while maintaining aspect ratio
-                  int maxWidth = self->viewportWidth;
-                  int maxHeight = self->viewportHeight;
-                  float scaleX = (dims.width > maxWidth) ? (float)maxWidth / dims.width : 1.0f;
-                  float scaleY = (dims.height > maxHeight) ? (float)maxHeight / dims.height : 1.0f;
-                  float scale = (scaleX < scaleY) ? scaleX : scaleY;
-                  if (scale > 1.0f) scale = 1.0f;
-
-                  displayWidth = (int)(dims.width * scale);
-                  displayHeight = (int)(dims.height * scale);
-                  LOG_DBG("EHP", "Display size: %dx%d (scale %.2f)", displayWidth, displayHeight, scale);
-                }
-
-                // Flush any pending text block so it appears before the image
-                if (self->partWordBufferIndex > 0) {
-                  self->flushPartWordBuffer();
-                }
-                if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
-                  const BlockStyle parentBlockStyle = self->currentTextBlock->getBlockStyle();
-                  self->startNewTextBlock(parentBlockStyle);
-                }
-
-                // Create page for image - only break if image won't fit remaining space
-                if (self->currentPage && !self->currentPage->elements.empty() &&
-                    (self->currentPageNextY + displayHeight > self->viewportHeight)) {
-                  self->completePageFn(std::move(self->currentPage));
-                  self->completedPageCount++;
-                  self->currentPage.reset(new Page());
-                  if (!self->currentPage) {
-                    LOG_ERR("EHP", "Failed to create new page");
-                    return;
-                  }
-                  self->currentPageNextY = 0;
-                } else if (!self->currentPage) {
-                  self->currentPage.reset(new Page());
-                  if (!self->currentPage) {
-                    LOG_ERR("EHP", "Failed to create initial page");
-                    return;
-                  }
-                  self->currentPageNextY = 0;
-                }
-
-                // Create ImageBlock and add to page
-                auto imageBlock = std::make_shared<ImageBlock>(cachedImagePath, displayWidth, displayHeight);
-                if (!imageBlock) {
-                  LOG_ERR("EHP", "Failed to create ImageBlock");
-                  return;
-                }
-                int xPos = (self->viewportWidth - displayWidth) / 2;
-                auto pageImage = std::make_shared<PageImage>(imageBlock, xPos, self->currentPageNextY);
-                if (!pageImage) {
-                  LOG_ERR("EHP", "Failed to create PageImage");
-                  return;
-                }
-                self->currentPage->elements.push_back(pageImage);
-                self->currentPageNextY += displayHeight;
-
-                self->depth += 1;
-                return;
-              } else {
-                LOG_ERR("EHP", "Failed to get image dimensions");
-                Storage.remove(cachedImagePath.c_str());
-              }
-            } else {
-              LOG_ERR("EHP", "Failed to extract image");
-            }
-          }  // isFormatSupported
-        }
+      if (!src.empty() && self->tryHandleRasterImage(src, alt, classAttr, styleAttr, hintedWidth, hintedHeight)) {
+        self->depth += 1;
+        return;
       }
 
       // Fallback to alt text if image processing fails
@@ -774,6 +919,10 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     return;
   }
 
+  if (self->insideSvgWrapper) {
+    return;
+  }
+
   // Collect footnote link display text (for the number label)
   // Skip whitespace and brackets to normalize noterefs like "[1]" → "1"
   if (self->insideFootnoteLink) {
@@ -957,23 +1106,37 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
 
+  if (self->insideSvgWrapper) {
+    self->depth -= 1;
+    if (tagLocalEquals(name, "svg") && self->depth == self->svgWrapperDepth) {
+      self->insideSvgWrapper = false;
+      self->svgWrapperDepth = -1;
+      self->svgWrapperHandledImage = false;
+      self->svgWrapperWidth = -1;
+      self->svgWrapperHeight = -1;
+      self->svgWrapperAspectRatio = 0.0f;
+    }
+    return;
+  }
+
   if (self->insideRuby &&
-      (strcmp(name, "rt") == 0 || strcmp(name, "rb") == 0 || strcmp(name, "rp") == 0 || strcmp(name, "ruby") == 0)) {
+      (tagLocalEquals(name, "rt") || tagLocalEquals(name, "rb") || tagLocalEquals(name, "rp") ||
+       tagLocalEquals(name, "ruby"))) {
     self->depth -= 1;
 
-    if (strcmp(name, "rt") == 0) {
+    if (tagLocalEquals(name, "rt")) {
       self->insideRubyText = false;
       self->insideRubyFallbackParen = false;
       self->flushPendingRubySegment();
       return;
     }
 
-    if (strcmp(name, "rp") == 0) {
+    if (tagLocalEquals(name, "rp")) {
       self->insideRubyFallbackParen = false;
       return;
     }
 
-    if (strcmp(name, "rb") == 0) {
+    if (tagLocalEquals(name, "rb")) {
       self->insideRubyText = false;
       self->insideRubyFallbackParen = false;
       return;
