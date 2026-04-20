@@ -439,11 +439,6 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
             hasCover = false;
           }
           file.close();
-        } else {
-          // File missing on disk (e.g. thumb generation is being retried after a
-          // transient OOM). Fall through to the empty-cover fallback so the card
-          // doesn't render as a blank white rectangle.
-          hasCover = false;
         }
       }
 
