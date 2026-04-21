@@ -152,7 +152,7 @@ def build_forced_non_cjk_intervals(job: FontJob, resolved_fallback_path: Path) -
     return format_intervals(merge_codepoints_to_intervals(exportable_non_cjk))
 
 
-def build_fontconvert_command(job: FontJob, resolved_fallback_path: Path) -> list[str]:
+def build_fontconvert_command(job: FontJob, resolved_fallback_path: Path, compress: bool) -> list[str]:
     cjk_intervals = build_cjk_intervals(job, resolved_fallback_path)
     forced_non_cjk_intervals = build_forced_non_cjk_intervals(job, resolved_fallback_path)
     interval_file = CACHE_FONT_DIR / f"{job.name}-additional-intervals.txt"
@@ -177,18 +177,19 @@ def build_fontconvert_command(job: FontJob, resolved_fallback_path: Path) -> lis
         str(job.primary_path),
         str(resolved_fallback_path),
         "--2bit",
-        "--compress",
         "--additional-intervals-file",
         str(interval_file),
         "--forced-intervals-file",
         str(forced_interval_file),
     ]
+    if compress:
+        command.append("--compress")
     for interval in EXCLUDED_INTERVALS:
         command.extend(["--exclude-intervals", interval])
     return command
 
 
-def run_job(job: FontJob, check_only: bool) -> None:
+def run_job(job: FontJob, check_only: bool, compress: bool) -> None:
     ensure_exists(job.primary_path)
     ensure_exists(job.fallback_path)
 
@@ -198,7 +199,7 @@ def run_job(job: FontJob, check_only: bool) -> None:
         extracted_path = CACHE_FONT_DIR / f"{job.name}-fallback.ttf"
         resolved_fallback = extract_ttc_face(job.fallback_path, job.ttc_index, extracted_path)
 
-    command = build_fontconvert_command(job, resolved_fallback)
+    command = build_fontconvert_command(job, resolved_fallback, compress)
     print(f"[FONT] {job.name}")
     print(f"  primary  : {job.primary_path}")
     print(f"  fallback : {resolved_fallback}")
@@ -215,10 +216,12 @@ def run_job(job: FontJob, check_only: bool) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate builtin KoPubWorld + Japanese fallback font headers")
     parser.add_argument("--check", action="store_true", help="Resolve inputs and print commands without generating")
+    parser.add_argument("--uncompressed", action="store_true", help="Generate uncompressed fonts instead of compressed grouped fonts")
     args = parser.parse_args()
+    compress = not args.uncompressed
 
     for job in build_jobs():
-        run_job(job, check_only=args.check)
+        run_job(job, check_only=args.check, compress=compress)
 
     return 0
 

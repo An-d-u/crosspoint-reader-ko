@@ -2,8 +2,10 @@
 
 class CrossPointSettings;
 class CrossPointState;
+#if CROSSPOINT_ENABLE_NETWORK
 class WifiCredentialStore;
 class KOReaderCredentialStore;
+#endif
 class RecentBooksStore;
 
 namespace JsonSettingsIO {
@@ -16,6 +18,7 @@ bool loadSettings(CrossPointSettings& s, const char* json, bool* needsResave = n
 bool saveState(const CrossPointState& s, const char* path);
 bool loadState(CrossPointState& s, const char* json);
 
+#if CROSSPOINT_ENABLE_NETWORK
 // WifiCredentialStore
 bool saveWifi(const WifiCredentialStore& store, const char* path);
 bool loadWifi(WifiCredentialStore& store, const char* json, bool* needsResave = nullptr);
@@ -23,6 +26,7 @@ bool loadWifi(WifiCredentialStore& store, const char* json, bool* needsResave = 
 // KOReaderCredentialStore
 bool saveKOReader(const KOReaderCredentialStore& store, const char* path);
 bool loadKOReader(KOReaderCredentialStore& store, const char* json, bool* needsResave = nullptr);
+#endif
 
 // RecentBooksStore
 bool saveRecentBooks(const RecentBooksStore& store, const char* path);

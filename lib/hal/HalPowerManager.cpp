@@ -1,7 +1,9 @@
 #include "HalPowerManager.h"
 
 #include <Logging.h>
+#if CROSSPOINT_ENABLE_NETWORK
 #include <WiFi.h>
+#endif
 #include <esp_sleep.h>
 
 #include <cassert>
@@ -30,11 +32,13 @@ void HalPowerManager::setPowerSaving(bool enabled) {
     return;  // invalid state
   }
 
+#if CROSSPOINT_ENABLE_NETWORK
   auto wifiMode = WiFi.getMode();
   if (wifiMode != WIFI_MODE_NULL) {
     // Wifi is active, force disabling power saving
     enabled = false;
   }
+#endif
 
   // Note: We don't use mutex here to avoid too much overhead,
   // it's not very important if we read a slightly stale value for currentLockMode

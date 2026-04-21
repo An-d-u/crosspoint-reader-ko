@@ -10,10 +10,12 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#if CROSSPOINT_ENABLE_NETWORK
 #include "KOReaderCredentialStore.h"
+#include "WifiCredentialStore.h"
+#endif
 #include "RecentBooksStore.h"
 #include "SettingsList.h"
-#include "WifiCredentialStore.h"
 
 // Convert legacy settings.
 void applyLegacyStatusBarSettings(CrossPointSettings& settings) {
@@ -215,6 +217,7 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
 
 // ---- KOReaderCredentialStore ----
 
+#if CROSSPOINT_ENABLE_NETWORK
 bool JsonSettingsIO::saveKOReader(const KOReaderCredentialStore& store, const char* path) {
   JsonDocument doc;
   doc["username"] = store.getUsername();
@@ -298,6 +301,7 @@ bool JsonSettingsIO::loadWifi(WifiCredentialStore& store, const char* json, bool
   LOG_DBG("WCS", "Loaded %zu WiFi credentials from file", store.credentials.size());
   return true;
 }
+#endif
 
 // ---- RecentBooksStore ----
 

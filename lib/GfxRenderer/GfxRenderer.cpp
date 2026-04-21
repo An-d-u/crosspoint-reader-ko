@@ -114,9 +114,10 @@ enum class TextRotation { None, Rotated90CW };
 // lacks a real bold variant.
 template <TextRotation rotation>
 static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
-                           const UnifiedFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
-                           const bool pixelState, const EpdFontFamily::Style style) {
-  const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
+                           const UnifiedFontFamily& fontFamily,
+                           const UnifiedFontFamily::GlyphLookupResult& glyphLookup, const uint32_t cp, int cursorX,
+                           int cursorY, const bool pixelState, const EpdFontFamily::Style style) {
+  const EpdGlyph* glyph = glyphLookup.glyph;
   if (!glyph) {
     LOG_ERR("GFX", "No glyph for codepoint %d", cp);
     return;
@@ -139,7 +140,7 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
   // but flash fonts benefit from the decompressor cache, so route flash through the renderer.
   const uint8_t* bitmap = nullptr;
   if (fontFamily.getType() == UnifiedFontFamily::Type::FLASH) {
-    const EpdFontData* fontData = fontFamily.getFlashDataForCodepoint(cp, style);
+    const EpdFontData* fontData = glyphLookup.data;
     if (fontData) {
       is2Bit = fontData->is2Bit;
       ascender = static_cast<uint8_t>(fontData->ascender);
@@ -355,12 +356,14 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
   uint32_t prevCp = 0;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
     if (utf8IsCombiningMark(cp)) {
-      const EpdGlyph* combiningGlyph = font.getGlyph(cp, style);
+      const auto combiningGlyphLookup = font.lookupGlyph(cp, style);
+      const EpdGlyph* combiningGlyph = combiningGlyphLookup.glyph;
       if (!combiningGlyph) continue;
       const int raiseBy = combiningMark::raiseAboveBase(combiningGlyph->top, combiningGlyph->height, lastBaseTop);
       const int combiningX = combiningMark::centerOver(lastBaseX, lastBaseLeft, lastBaseWidth, combiningGlyph->left,
                                                        combiningGlyph->width);
-      renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, combiningX, yPos - raiseBy, black, style);
+      renderCharImpl<TextRotation::None>(*this, renderMode, font, combiningGlyphLookup, cp, combiningX, yPos - raiseBy,
+                                         black, style);
       continue;
     }
 
@@ -374,14 +377,15 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
       lastBaseX += fp4::toPixel(prevAdvanceFP + kernFP);       // snap 12.4 fixed-point to nearest pixel
     }
 
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    const auto glyphLookup = font.lookupGlyph(cp, style);
+    const EpdGlyph* glyph = glyphLookup.glyph;
 
     lastBaseLeft = glyph ? glyph->left : 0;
     lastBaseWidth = glyph ? glyph->width : 0;
     lastBaseTop = glyph ? glyph->top : 0;
     prevAdvanceFP = glyph ? glyph->advanceX : 0;  // 12.4 fixed-point
 
-    renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
+    renderCharImpl<TextRotation::None>(*this, renderMode, font, glyphLookup, cp, lastBaseX, yPos, black, style);
 
     // Apply Korean letter-spacing by bumping the next cursor position.
     // Scaled into 12.4 fixed-point so it combines cleanly with the glyph advance.
@@ -1158,7 +1162,7 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, const EpdFo
       widthPx += fp4::toPixel(prevAdvanceFP + kernFP);         // snap 12.4 fixed-point to nearest pixel
     }
 
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    const EpdGlyph* glyph = font.lookupGlyph(cp, style).glyph;
     prevAdvanceFP = glyph ? glyph->advanceX : 0;
     prevCp = cp;
   }
@@ -1229,13 +1233,15 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
   uint32_t prevCp = 0;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
     if (utf8IsCombiningMark(cp)) {
-      const EpdGlyph* combiningGlyph = font.getGlyph(cp, style);
+      const auto combiningGlyphLookup = font.lookupGlyph(cp, style);
+      const EpdGlyph* combiningGlyph = combiningGlyphLookup.glyph;
       if (!combiningGlyph) continue;
       const int raiseBy = combiningMark::raiseAboveBase(combiningGlyph->top, combiningGlyph->height, lastBaseTop);
       const int combiningX = x - raiseBy;
       const int combiningY = combiningMark::centerOverRotated90CW(lastBaseY, lastBaseLeft, lastBaseWidth,
                                                                   combiningGlyph->left, combiningGlyph->width);
-      renderCharImpl<TextRotation::Rotated90CW>(*this, renderMode, font, cp, combiningX, combiningY, black, style);
+      renderCharImpl<TextRotation::Rotated90CW>(*this, renderMode, font, combiningGlyphLookup, cp, combiningX,
+                                                combiningY, black, style);
       continue;
     }
 
@@ -1248,14 +1254,15 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
       lastBaseY -= fp4::toPixel(prevAdvanceFP + kernFP);       // snap 12.4 fixed-point to nearest pixel
     }
 
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    const auto glyphLookup = font.lookupGlyph(cp, style);
+    const EpdGlyph* glyph = glyphLookup.glyph;
 
     lastBaseLeft = glyph ? glyph->left : 0;
     lastBaseWidth = glyph ? glyph->width : 0;
     lastBaseTop = glyph ? glyph->top : 0;
     prevAdvanceFP = glyph ? glyph->advanceX : 0;  // 12.4 fixed-point
 
-    renderCharImpl<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, lastBaseY, black, style);
+    renderCharImpl<TextRotation::Rotated90CW>(*this, renderMode, font, glyphLookup, cp, x, lastBaseY, black, style);
     prevCp = cp;
   }
 }

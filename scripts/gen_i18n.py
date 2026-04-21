@@ -28,6 +28,8 @@ import re
 from pathlib import Path
 from typing import List, Dict, Tuple
 
+DEFAULT_INCLUDED_LANGUAGE_CODES = {"EN", "KOREAN"}
+
 
 # ---------------------------------------------------------------------------
 # YAML file reading (simple key: "value" format, no PyYAML dependency)
@@ -151,6 +153,18 @@ def load_translations(
         return (1, order_int, fname)
 
     ordered_files = sorted(parsed, key=sort_key)
+
+    allowed_codes_raw = os.environ.get("CROSSPOINT_I18N_LANGS", "")
+    if allowed_codes_raw.strip():
+        allowed_codes = {code.strip().upper() for code in allowed_codes_raw.split(",") if code.strip()}
+    else:
+        allowed_codes = set(DEFAULT_INCLUDED_LANGUAGE_CODES)
+
+    ordered_files = [
+        fname for fname in ordered_files if parsed[fname].get("_language_code", "").upper() in allowed_codes
+    ]
+    if english_file not in ordered_files:
+        raise ValueError("English must remain in the generated language set")
 
     # Extract metadata
     language_codes: List[str] = []

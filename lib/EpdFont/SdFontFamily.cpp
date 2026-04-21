@@ -233,7 +233,7 @@ void UnifiedFontFamily::getTextDimensions(const char* string, int* w, int* h, Ep
       cp = applyLigatures(cp, string, style);
     }
 
-    const EpdGlyph* glyph = getGlyph(cp, style);
+    const EpdGlyph* glyph = lookupGlyph(cp, style).glyph;
     if (!glyph) {
       if (!isCombining) {
         lastBaseX += fp4::toPixel(prevAdvanceFP);
@@ -286,25 +286,36 @@ bool UnifiedFontFamily::hasPrintableChars(const char* string, EpdFontStyle style
   return false;
 }
 
-const EpdGlyph* UnifiedFontFamily::getGlyph(uint32_t cp, EpdFontStyle style) const {
+UnifiedFontFamily::GlyphLookupResult UnifiedFontFamily::lookupGlyph(uint32_t cp, EpdFontStyle style) const {
   if (type == Type::FLASH && flashFont) {
-    if (flashFont->hasGlyph(cp, style)) {
-      return flashFont->getGlyphExact(cp, style);
+    const EpdFontData* primaryData = flashFont->getData(style);
+    if (const EpdGlyph* glyph = flashFont->getGlyphExact(cp, style)) {
+      return {glyph, primaryData};
     }
-    if (flashFallbackFont && flashFallbackFont->hasGlyph(cp, style)) {
-      return flashFallbackFont->getGlyphExact(cp, style);
+
+    if (flashFallbackFont) {
+      const EpdFontData* fallbackData = flashFallbackFont->getData(style);
+      if (const EpdGlyph* glyph = flashFallbackFont->getGlyphExact(cp, style)) {
+        return {glyph, fallbackData};
+      }
     }
-    return flashFont->getGlyph(cp, style);
+
+    return {flashFont->getGlyph(cp, style), primaryData};
   } else if (sdFont) {
-    return sdFont->getGlyph(cp, style);
+    return {sdFont->getGlyph(cp, style), nullptr};
   }
-  return nullptr;
+  return {};
+}
+
+const EpdGlyph* UnifiedFontFamily::getGlyph(uint32_t cp, EpdFontStyle style) const {
+  return lookupGlyph(cp, style).glyph;
 }
 
 const uint8_t* UnifiedFontFamily::getGlyphBitmap(uint32_t cp, EpdFontStyle style) const {
   if (type == Type::FLASH && flashFont) {
-    const EpdFontData* data = getFlashDataForCodepoint(cp, style);
-    const EpdGlyph* glyph = getGlyph(cp, style);
+    const auto glyphLookup = lookupGlyph(cp, style);
+    const EpdFontData* data = glyphLookup.data;
+    const EpdGlyph* glyph = glyphLookup.glyph;
     if (data && glyph) {
       return &data->bitmap[glyph->dataOffset];
     }
@@ -363,16 +374,7 @@ const EpdFontData* UnifiedFontFamily::getFlashData(EpdFontStyle style) const {
 }
 
 const EpdFontData* UnifiedFontFamily::getFlashDataForCodepoint(uint32_t cp, EpdFontStyle style) const {
-  if (type != Type::FLASH || !flashFont) {
-    return nullptr;
-  }
-  if (flashFont->hasGlyph(cp, style)) {
-    return flashFont->getData(style);
-  }
-  if (flashFallbackFont && flashFallbackFont->hasGlyph(cp, style)) {
-    return flashFallbackFont->getData(style);
-  }
-  return flashFont->getData(style);
+  return lookupGlyph(cp, style).data;
 }
 
 bool UnifiedFontFamily::hasBold() const {

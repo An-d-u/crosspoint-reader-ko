@@ -18,7 +18,9 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#if CROSSPOINT_ENABLE_NETWORK
 #include "KOReaderCredentialStore.h"
+#endif
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
@@ -282,7 +284,9 @@ void setup() {
 
   SETTINGS.loadFromFile();
   I18N.loadSettings();
+#if CROSSPOINT_ENABLE_NETWORK
   KOREADER_STORE.loadFromFile();
+#endif
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
 

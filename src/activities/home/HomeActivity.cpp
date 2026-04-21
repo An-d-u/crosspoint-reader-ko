@@ -20,13 +20,16 @@
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 4;  // File Browser, Recents, File transfer, Settings
+  int count = 3;  // File Browser, Recents, Settings
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
+#if CROSSPOINT_ENABLE_NETWORK
+  count += 1;  // File transfer
   if (hasOpdsUrl) {
     count++;
   }
+#endif
   return count;
 }
 
@@ -116,8 +119,12 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 void HomeActivity::onEnter() {
   Activity::onEnter();
 
+#if CROSSPOINT_ENABLE_NETWORK
   // Check if OPDS browser URL is configured
   hasOpdsUrl = strlen(SETTINGS.opdsServerUrl) > 0;
+#else
+  hasOpdsUrl = false;
+#endif
 
   selectorIndex = 0;
 
@@ -196,8 +203,10 @@ void HomeActivity::loop() {
     int menuSelectedIndex = selectorIndex - static_cast<int>(recentBooks.size());
     const int fileBrowserIdx = idx++;
     const int recentsIdx = idx++;
+#if CROSSPOINT_ENABLE_NETWORK
     const int opdsLibraryIdx = hasOpdsUrl ? idx++ : -1;
     const int fileTransferIdx = idx++;
+#endif
     const int settingsIdx = idx;
 
     if (selectorIndex < recentBooks.size()) {
@@ -206,10 +215,12 @@ void HomeActivity::loop() {
       onFileBrowserOpen();
     } else if (menuSelectedIndex == recentsIdx) {
       onRecentsOpen();
+#if CROSSPOINT_ENABLE_NETWORK
     } else if (menuSelectedIndex == opdsLibraryIdx) {
       onOpdsBrowserOpen();
     } else if (menuSelectedIndex == fileTransferIdx) {
       onFileTransferOpen();
+#endif
     } else if (menuSelectedIndex == settingsIdx) {
       onSettingsOpen();
     }
@@ -231,15 +242,18 @@ void HomeActivity::render(RenderLock&&) {
                           std::bind(&HomeActivity::storeCoverBuffer, this));
 
   // Build menu items dynamically
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
-                                        tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings};
+  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_SETTINGS_TITLE)};
+  std::vector<UIIcon> menuIcons = {Folder, Recent, Settings};
 
+#if CROSSPOINT_ENABLE_NETWORK
+  menuItems.insert(menuItems.begin() + 2, tr(STR_FILE_TRANSFER));
+  menuIcons.insert(menuIcons.begin() + 2, Transfer);
   if (hasOpdsUrl) {
     // Insert OPDS Browser after File Browser
     menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
     menuIcons.insert(menuIcons.begin() + 2, Library);
   }
+#endif
 
   GUI.drawButtonMenu(
       renderer,
