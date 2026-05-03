@@ -12,26 +12,38 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from fontTools.ttLib import TTFont
+
 
 ROOT = Path(__file__).resolve().parents[2]
 BOOKS_DIR = ROOT / "books"
 READER_HEADER = ROOT / "lib" / "EpdFont" / "builtinFonts" / "kopubworld_batang_jp_14_regular.h"
+PRIMARY_FONT = ROOT / "fonts" / "KoPubWorld Batang_Pro Medium.otf"
+FALLBACK_FONT = Path(r"C:\Windows\Fonts\yumin.ttf")
 CJK_START = 0x4E00
 CJK_END = 0x9FFF
 TEXT_EXTENSIONS = {".txt"}
 EPUB_XML_EXTENSIONS = {".xhtml", ".html", ".htm", ".xml", ".ncx", ".opf"}
 
 
-def parse_intervals(header_path: Path) -> list[tuple[int, int]]:
+def parse_intervals(header_path: Path) -> set[int]:
     content = header_path.read_text(encoding="utf-8")
-    return [
-        (int(start, 16), int(end, 16))
-        for start, end in re.findall(r"\{\s*0x([0-9A-Fa-f]+)\s*,\s*0x([0-9A-Fa-f]+)\s*,\s*0x[0-9A-Fa-f]+\s*\}", content)
-    ]
+    codepoints: set[int] = set()
+    for start, end in re.findall(r"\{\s*0x([0-9A-Fa-f]+)\s*,\s*0x([0-9A-Fa-f]+)\s*,\s*0x[0-9A-Fa-f]+\s*\}", content):
+        codepoints.update(range(int(start, 16), int(end, 16) + 1))
+    return codepoints
 
 
-def has_codepoint(intervals: list[tuple[int, int]], cp: int) -> bool:
-    return any(start <= cp <= end for start, end in intervals)
+def has_codepoint(codepoints: set[int], cp: int) -> bool:
+    return cp in codepoints
+
+
+def load_font_codepoints(font_path: Path) -> set[int]:
+    font = TTFont(str(font_path))
+    try:
+        return set((font.getBestCmap() or {}).keys())
+    finally:
+        font.close()
 
 
 def extract_xml_text(blob: bytes) -> str:
@@ -73,27 +85,33 @@ def main() -> int:
         return 0
 
     intervals = parse_intervals(READER_HEADER)
-    missing_counts: dict[int, int] = {}
-    missing_sources: dict[int, str] = {}
+    source_supported = load_font_codepoints(PRIMARY_FONT) | load_font_codepoints(FALLBACK_FONT)
+    supported_missing_sources: dict[int, str] = {}
+    unsupported_sources: dict[int, str] = {}
 
     for source, text in texts:
-        for ch in text:
+        for ch in set(text):
             cp = ord(ch)
             if not (CJK_START <= cp <= CJK_END):
                 continue
             if has_codepoint(intervals, cp):
                 continue
-            missing_counts[cp] = missing_counts.get(cp, 0) + 1
-            missing_sources.setdefault(cp, source)
+            if cp in source_supported:
+                supported_missing_sources.setdefault(cp, source)
+            else:
+                unsupported_sources.setdefault(cp, source)
 
-    if missing_counts:
-        print("FAIL: current reader builtin font is missing CJK ideographs used by local books.")
-        print(f" - unique missing ideographs: {len(missing_counts)}")
-        for cp, count in sorted(missing_counts.items(), key=lambda item: (-item[1], item[0]))[:20]:
-            print(f" - U+{cp:04X} count={count} source={missing_sources[cp]}")
+    if supported_missing_sources:
+        print("FAIL: current reader builtin font is missing source-supported CJK ideographs used by local books.")
+        print(f" - unique supported missing ideographs: {len(supported_missing_sources)}")
+        for cp in sorted(supported_missing_sources)[:20]:
+            print(f" - U+{cp:04X} source={supported_missing_sources[cp]}")
+        if unsupported_sources:
+            print(f" - unsupported by current font sources (reference only): {len(unsupported_sources)}")
         return 1
 
-    print("PASS: local books do not use CJK ideographs missing from the current reader builtin font.")
+    print("PASS: local books do not use any source-supported CJK ideographs missing from the current reader builtin font.")
+    print(f" - unsupported by current font sources: {len(unsupported_sources)}")
     return 0
 
 

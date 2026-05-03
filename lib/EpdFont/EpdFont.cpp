@@ -4,6 +4,11 @@
 
 #include <algorithm>
 
+namespace {
+constexpr uint32_t SQUARE_FALLBACK_GLYPH = 0x25A1;
+constexpr uint32_t QUESTION_FALLBACK_GLYPH = '?';
+}
+
 void EpdFont::getTextBounds(const char* string, const int startX, const int startY, int* minX, int* minY, int* maxX,
                             int* maxY) const {
   *minX = startX;
@@ -178,7 +183,19 @@ const EpdGlyph* EpdFont::getGlyph(const uint32_t cp) const {
     return glyph;
   }
   if (cp != REPLACEMENT_GLYPH) {
-    return getGlyph(REPLACEMENT_GLYPH);
+    if (const auto* glyph = getGlyphExact(REPLACEMENT_GLYPH)) {
+      return glyph;
+    }
+  }
+  if (cp != SQUARE_FALLBACK_GLYPH) {
+    if (const auto* glyph = getGlyphExact(SQUARE_FALLBACK_GLYPH)) {
+      return glyph;
+    }
+  }
+  if (cp != QUESTION_FALLBACK_GLYPH) {
+    if (const auto* glyph = getGlyphExact(QUESTION_FALLBACK_GLYPH)) {
+      return glyph;
+    }
   }
   return nullptr;
 }

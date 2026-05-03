@@ -99,6 +99,43 @@ static const EpdFontData kTestFontData = {
 
 static EpdFont testFont(&kTestFontData);
 
+// clang-format off
+static const EpdGlyph kFallbackGlyphs[] = {
+  /* 0 'o' */ { 8,  8, 145, 0,  8, 0, 0 },
+  /* 1 '□' */ { 8,  8, 145, 0,  8, 0, 0 },
+};
+
+static const EpdUnicodeInterval kFallbackIntervals[] = {
+  { 0x6F, 0x6F, 0 },      // 'o' -> glyph[0]
+  { 0x25A1, 0x25A1, 1 },  // '□' -> glyph[1]
+};
+
+static const EpdFontData kFallbackFontData = {
+  .bitmap              = nullptr,
+  .glyph               = kFallbackGlyphs,
+  .intervals           = kFallbackIntervals,
+  .intervalCount       = 2,
+  .advanceY            = 16,
+  .ascender            = 8,
+  .descender           = 0,
+  .is2Bit              = false,
+  .groups              = nullptr,
+  .groupCount          = 0,
+  .glyphToGroup        = nullptr,
+  .kernLeftClasses     = nullptr,
+  .kernRightClasses    = nullptr,
+  .kernMatrix          = nullptr,
+  .kernLeftEntryCount  = 0,
+  .kernRightEntryCount = 0,
+  .kernLeftClassCount  = 0,
+  .kernRightClassCount = 0,
+  .ligaturePairs       = nullptr,
+  .ligaturePairCount   = 0,
+};
+// clang-format on
+
+static EpdFont fallbackFont(&kFallbackFontData);
+
 // Helper: return width from getTextDimensions
 static int textWidth(const char* str) {
   int w = 0, h = 0;
@@ -233,6 +270,17 @@ void testGlyphLookup() {
   ASSERT_TRUE(testFont.getGlyph('b') == nullptr);
 
   printf("  All glyph lookups correct\n");
+  PASS();
+}
+
+void testSquareFallbackGlyphLookup() {
+  printf("testSquareFallbackGlyphLookup...\n");
+
+  const EpdGlyph* squareGlyph = fallbackFont.getGlyph(0x25A1);
+  ASSERT_TRUE(squareGlyph != nullptr);
+  ASSERT_TRUE(fallbackFont.getGlyph('Z') == squareGlyph);
+
+  printf("  Missing glyphs fall back to square placeholder\n");
   PASS();
 }
 
@@ -371,6 +419,7 @@ int main() {
   // Part 2: Integration tests against real EpdFont
   testKernLookup();
   testGlyphLookup();
+  testSquareFallbackGlyphLookup();
   testKnownWidths();
   testPairConsistencyViaFont();
   testNullGlyphAdvancePreserved();
