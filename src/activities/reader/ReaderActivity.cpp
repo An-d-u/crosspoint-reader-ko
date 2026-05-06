@@ -2,7 +2,6 @@
 
 #include <FsHelpers.h>
 #include <HalStorage.h>
-#include <I18n.h>
 
 #include "CrossPointSettings.h"
 #include "Epub.h"
@@ -13,7 +12,6 @@
 #include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
-#include "components/UITheme.h"
 
 bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasXtcExtension(path); }
 
@@ -107,17 +105,8 @@ void ReaderActivity::onEnter() {
 
   currentBookPath = initialBookPath;
   if (isBmpFile(initialBookPath)) {
-    // BmpViewer shows its own loading popup.
     onGoToBmpViewer(initialBookPath);
-    return;
-  }
-
-  // Large EPUB/XTC/TXT files can take noticeable time to parse on first open.
-  // Show a loading popup before the format-specific loader runs so the device
-  // doesn't look frozen on the file browser frame.
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-
-  if (isXtcFile(initialBookPath)) {
+  } else if (isXtcFile(initialBookPath)) {
     auto xtc = loadXtc(initialBookPath);
     if (!xtc) {
       onGoBack();

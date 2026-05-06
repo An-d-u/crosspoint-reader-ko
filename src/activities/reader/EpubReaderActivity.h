@@ -69,7 +69,4 @@ class EpubReaderActivity final : public Activity {
   void loop() override;
   void render(RenderLock&& lock) override;
   bool isReaderActivity() const override { return true; }
-  // Prevent auto-sleep while auto page-turn is running so unattended reads
-  // don't get interrupted by the global inactivity timer.
-  bool preventAutoSleep() override { return automaticPageTurnActive; }
 };
