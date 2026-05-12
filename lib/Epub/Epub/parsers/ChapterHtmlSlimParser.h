@@ -90,6 +90,7 @@ class ChapterHtmlSlimParser {
   bool insideRuby = false;
   bool insideRubyText = false;
   bool insideRubyFallbackParen = false;
+  bool suppressWhitespaceAfterRuby = false;
   std::string rubyBaseBuffer;
   std::string rubyTextBuffer;
   bool insideSvgWrapper = false;

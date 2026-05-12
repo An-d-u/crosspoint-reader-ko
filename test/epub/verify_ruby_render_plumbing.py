@@ -14,8 +14,9 @@ def require(pattern: str, path: Path, description: str) -> None:
 
 def main() -> int:
     try:
-        require(r"rubyTexts", ROOT / "lib/Epub/Epub/ParsedText.h", "ParsedText ruby storage")
-        require(r"rubyTexts", ROOT / "lib/Epub/Epub/blocks/TextBlock.h", "TextBlock ruby storage")
+        require(r"rubyAnnotations", ROOT / "lib/Epub/Epub/ParsedText.h", "ParsedText ruby annotation storage")
+        require(r"RubyAnnotation", ROOT / "lib/Epub/Epub/blocks/TextBlock.h", "TextBlock ruby annotation type")
+        require(r"rubyAnnotations", ROOT / "lib/Epub/Epub/blocks/TextBlock.h", "TextBlock ruby annotation storage")
         require(r"rubyFontId", ROOT / "lib/Epub/Epub/Page.h", "Page render ruby font plumbing")
         require(r"tagLocalEquals\(name,\s*\"ruby\"\)", ROOT / "lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp",
                 "ruby tag handling")
@@ -27,7 +28,7 @@ def main() -> int:
                 "ruby overlay builder")
         require(r"resolveRubyRunOverlaps\s*\(", ROOT / "lib/Epub/Epub/blocks/TextBlock.cpp",
                 "ruby overlay overlap resolver")
-        require(r"SECTION_FILE_VERSION\s*=\s*28", ROOT / "lib/Epub/Epub/Section.cpp",
+        require(r"SECTION_FILE_VERSION\s*=\s*29", ROOT / "lib/Epub/Epub/Section.cpp",
                 "section cache version bump for ruby serialization")
     except AssertionError as exc:
         print(exc)

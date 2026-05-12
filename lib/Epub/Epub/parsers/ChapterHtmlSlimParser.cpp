@@ -221,6 +221,7 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   currentTextBlock->addWord(partWordBuffer, currentFontStyle(), false, nextWordContinues);
   partWordBufferIndex = 0;
   nextWordContinues = false;
+  suppressWhitespaceAfterRuby = false;
 }
 
 void ChapterHtmlSlimParser::flushRubyToTextBlock() {
@@ -234,6 +235,7 @@ void ChapterHtmlSlimParser::flushRubyToTextBlock() {
     currentTextBlock->addWord(std::move(rubyBaseBuffer), currentFontStyle(), false, nextWordContinues,
                               std::move(rubyTextBuffer));
     nextWordContinues = true;
+    suppressWhitespaceAfterRuby = true;
   }
 
   rubyBaseBuffer.clear();
@@ -941,11 +943,17 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       if (self->partWordBufferIndex > 0) {
         self->flushPartWordBuffer();
       }
+      if (self->suppressWhitespaceAfterRuby) {
+        self->nextWordContinues = true;
+        continue;
+      }
       // Whitespace is a real word boundary — reset continuation state
       self->nextWordContinues = false;
       // Skip the whitespace char
       continue;
     }
+
+    self->suppressWhitespaceAfterRuby = false;
 
     // Detect U+00A0 (non-breaking space, UTF-8: 0xC2 0xA0) or
     //        U+202F (narrow no-break space, UTF-8: 0xE2 0x80 0xAF).

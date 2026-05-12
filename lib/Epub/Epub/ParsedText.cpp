@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <vector>
@@ -96,12 +97,36 @@ int getRubyContinuationTighten(const std::vector<std::string>& rubyTexts, const 
 
 }  // namespace
 
+static std::vector<std::string> splitUtf8Chars(const std::string& str);
+
 void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle, const bool underline,
                          const bool attachToPrevious, std::string rubyText) {
   if (word.empty()) return;
 
+  if (!rubyText.empty()) {
+    auto rubyBaseChars = splitUtf8Chars(word);
+    if (rubyBaseChars.empty()) return;
+
+    const size_t rubyStart = words.size();
+    const uint16_t rubySpan = static_cast<uint16_t>(std::min<size_t>(rubyBaseChars.size(), UINT16_MAX));
+    rubyAnnotations.push_back({static_cast<uint16_t>(std::min<size_t>(rubyStart, UINT16_MAX)), rubySpan,
+                               std::move(rubyText)});
+
+    for (size_t i = 0; i < rubyBaseChars.size(); ++i) {
+      words.push_back(std::move(rubyBaseChars[i]));
+      rubyTexts.emplace_back();
+      EpdFontFamily::Style combinedStyle = fontStyle;
+      if (underline) {
+        combinedStyle = static_cast<EpdFontFamily::Style>(combinedStyle | EpdFontFamily::UNDERLINE);
+      }
+      wordStyles.push_back(combinedStyle);
+      wordContinues.push_back(i == 0 ? attachToPrevious : true);
+    }
+    return;
+  }
+
   words.push_back(std::move(word));
-  rubyTexts.push_back(std::move(rubyText));
+  rubyTexts.emplace_back();
   EpdFontFamily::Style combinedStyle = fontStyle;
   if (underline) {
     combinedStyle = static_cast<EpdFontFamily::Style>(combinedStyle | EpdFontFamily::UNDERLINE);
@@ -130,6 +155,25 @@ static std::vector<std::string> splitUtf8Chars(const std::string& str) {
   return chars;
 }
 
+bool ParsedText::isRubyAnnotatedWord(const size_t wordIndex) const {
+  for (const auto& ruby : rubyAnnotations) {
+    const size_t start = ruby.startWordIndex;
+    const size_t end = start + ruby.wordCount;
+    if (wordIndex >= start && wordIndex < end) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void ParsedText::shiftRubyAnnotationsAfterInsert(const size_t wordIndex) {
+  for (auto& ruby : rubyAnnotations) {
+    if (ruby.startWordIndex > wordIndex) {
+      ruby.startWordIndex++;
+    }
+  }
+}
+
 // Character-wrap mode: greedy line filling with justified alignment (1.0x-1.5x spacing)
 // If spacing would exceed 1.5x, split words at character boundaries to fill the line
 void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int fontId, const int rubyFontId,
@@ -150,15 +194,94 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
   while (!words.empty()) {
     std::vector<std::string> lineWordsVec;
     std::vector<std::string> lineRubyTextsVec;
+    std::vector<RubyAnnotation> lineRubyAnnotationsVec;
     std::vector<bool> lineWordContinuesVec;
     std::vector<int> lineWordWidths;
     std::vector<EpdFontFamily::Style> lineWordStylesVec;
+    int totalWordWidth = 0;
+
+    auto visibleGapCount = [&]() {
+      int count = 0;
+      for (size_t i = 1; i < lineWordContinuesVec.size(); ++i) {
+        if (!lineWordContinuesVec[i]) {
+          ++count;
+        }
+      }
+      return count;
+    };
+
+    auto shiftRubyAnnotationsAfterConsumingWords = [&](const size_t consumedCount) {
+      for (auto& ruby : rubyAnnotations) {
+        if (ruby.startWordIndex >= consumedCount) {
+          ruby.startWordIndex = static_cast<uint16_t>(ruby.startWordIndex - consumedCount);
+        } else {
+          ruby.startWordIndex = 0;
+        }
+      }
+    };
+
+    auto consumeFrontRubyGroup = [&]() {
+      const size_t rubySpan = std::min<size_t>(rubyAnnotations.front().wordCount, words.size());
+      const uint16_t lineWordIndex = static_cast<uint16_t>(lineWordsVec.size());
+      lineRubyAnnotationsVec.push_back({lineWordIndex, static_cast<uint16_t>(rubySpan),
+                                        std::move(rubyAnnotations.front().text)});
+      rubyAnnotations.erase(rubyAnnotations.begin());
+
+      for (size_t i = 0; i < rubySpan; ++i) {
+        const EpdFontFamily::Style wordStyle = wordStyles.front();
+        const int wordWidth = measureTokenWidth(renderer, fontId, rubyFontId, words.front(), "", wordStyle);
+        lineWordsVec.push_back(std::move(words.front()));
+        lineRubyTextsVec.emplace_back();
+        lineWordContinuesVec.push_back(wordContinues.front());
+        lineWordWidths.push_back(wordWidth);
+        lineWordStylesVec.push_back(wordStyle);
+        totalWordWidth += wordWidth;
+
+        words.erase(words.begin());
+        rubyTexts.erase(rubyTexts.begin());
+        wordContinues.erase(wordContinues.begin());
+        wordStyles.erase(wordStyles.begin());
+      }
+      shiftRubyAnnotationsAfterConsumingWords(rubySpan);
+    };
+
+    auto measureFrontRubyGroupWidth = [&]() {
+      const size_t rubySpan = std::min<size_t>(rubyAnnotations.front().wordCount, words.size());
+      int width = 0;
+      for (size_t i = 0; i < rubySpan; ++i) {
+        width += measureTokenWidth(renderer, fontId, rubyFontId, words[i], "", wordStyles[i]);
+      }
+      return width;
+    };
+
+    auto consumeFrontWord = [&]() {
+      shiftRubyAnnotationsAfterConsumingWords(1);
+    };
 
     // Phase 1: Greedily collect words/characters to fill the line
     // Target: spacing should be between minSpacing and maxSpacing
-    int totalWordWidth = 0;
 
     while (!words.empty()) {
+      if (!rubyAnnotations.empty() && rubyAnnotations.front().startWordIndex == 0) {
+        const int rubyGroupWidth = measureFrontRubyGroupWidth();
+        const int newTotalWidth = totalWordWidth + rubyGroupWidth;
+        const int addedGap = (!lineWordsVec.empty() && !wordContinues.front()) ? 1 : 0;
+        const int newGapCount = visibleGapCount() + addedGap;
+        const int newSpareSpace = pageWidth - newTotalWidth;
+        const int newSpacing = (newGapCount > 0) ? (newSpareSpace / newGapCount) : maxSpacing + 1;
+
+        if (!lineWordsVec.empty() && newTotalWidth > pageWidth) {
+          break;
+        }
+
+        if (!lineWordsVec.empty() && newSpacing < minSpacing) {
+          break;
+        }
+
+        consumeFrontRubyGroup();
+        continue;
+      }
+
       const std::string& word = words.front();
       const std::string& rubyText = rubyTexts.front();
       const EpdFontFamily::Style wordStyle = wordStyles.front();
@@ -166,7 +289,10 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
 
       // Calculate what spacing would be if we add this word
       int newTotalWidth = totalWordWidth + wordWidth;
-      int newGapCount = lineWordsVec.size();  // gaps = word count (before adding new word)
+      int newGapCount = visibleGapCount();
+      if (!lineWordsVec.empty() && !wordContinues.front()) {
+        ++newGapCount;
+      }
       int newSpareSpace = pageWidth - newTotalWidth;
       int newSpacing = (newGapCount > 0) ? (newSpareSpace / newGapCount) : maxSpacing + 1;
 
@@ -180,6 +306,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
           lineWordWidths.push_back(wordWidth);
           lineWordStylesVec.push_back(wordStyle);
           totalWordWidth = wordWidth;
+          consumeFrontWord();
           words.erase(words.begin());
           rubyTexts.erase(rubyTexts.begin());
           wordContinues.erase(wordContinues.begin());
@@ -192,6 +319,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
             lineWordWidths.push_back(wordWidth);
             lineWordStylesVec.push_back(wordStyle);
             totalWordWidth = wordWidth;
+            consumeFrontWord();
             words.erase(words.begin());
             rubyTexts.erase(rubyTexts.begin());
             wordContinues.erase(wordContinues.begin());
@@ -227,13 +355,14 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
             for (size_t i = charsFit; i < chars.size(); i++) remainder += chars[i];
             words.front() = remainder;
           } else {
+            consumeFrontWord();
             words.erase(words.begin());
             rubyTexts.erase(rubyTexts.begin());
             wordContinues.erase(wordContinues.begin());
             wordStyles.erase(wordStyles.begin());
           }
         }
-      } else if (newSpacing >= minSpacing) {
+      } else if (newTotalWidth <= pageWidth && newSpacing >= minSpacing) {
         // Adding this word keeps spacing >= minSpacing - add it
         const bool attachToPrevious = wordContinues.front();
         lineWordsVec.push_back(word);
@@ -242,6 +371,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
         lineWordWidths.push_back(wordWidth);
         lineWordStylesVec.push_back(wordStyle);
         totalWordWidth = newTotalWidth;
+        consumeFrontWord();
         words.erase(words.begin());
         rubyTexts.erase(rubyTexts.begin());
         wordContinues.erase(wordContinues.begin());
@@ -255,7 +385,10 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
       } else {
         // Adding whole word would make spacing < minSpacing
         // Try to add partial characters from this word
-        int currentGapCount = lineWordsVec.size();
+        int currentGapCount = visibleGapCount();
+        if (!wordContinues.front()) {
+          ++currentGapCount;
+        }
         // We want: (pageWidth - totalWordWidth - partialWidth) / currentGapCount >= minSpacing
         // So: partialWidth <= pageWidth - totalWordWidth - currentGapCount * minSpacing
         int maxPartialWidth = pageWidth - totalWordWidth - currentGapCount * minSpacing;
@@ -290,6 +423,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
               for (size_t i = charsFit; i < chars.size(); i++) remainder += chars[i];
               words.front() = remainder;
             } else {
+              consumeFrontWord();
               words.erase(words.begin());
               rubyTexts.erase(rubyTexts.begin());
               wordContinues.erase(wordContinues.begin());
@@ -304,13 +438,27 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
 
     // Phase 2: Check if spacing is too large, fill with more characters
     while (!words.empty() && lineWordsVec.size() >= 1) {
-      int gapCount = lineWordsVec.size();
+      int gapCount = visibleGapCount();
+      if (!wordContinues.front()) {
+        ++gapCount;
+      }
+      if (gapCount <= 0) break;
       int spareSpace = pageWidth - totalWordWidth;
       int spacing = (gapCount > 0) ? (spareSpace / gapCount) : 0;
 
       if (spacing <= maxSpacing) break;  // Spacing is acceptable
 
       // Spacing too large - try to add characters from next word
+      if (!rubyAnnotations.empty() && rubyAnnotations.front().startWordIndex == 0) {
+        const int rubyGroupWidth = measureFrontRubyGroupWidth();
+        const int maxRubyGroupWidth = pageWidth - totalWordWidth - gapCount * minSpacing;
+        if (rubyGroupWidth <= 0 || rubyGroupWidth > maxRubyGroupWidth) {
+          break;
+        }
+        consumeFrontRubyGroup();
+        continue;
+      }
+
       const std::string& nextWord = words.front();
       const std::string& nextRubyText = rubyTexts.front();
       const EpdFontFamily::Style nextStyle = wordStyles.front();
@@ -356,6 +504,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
         for (size_t i = charsFit; i < chars.size(); i++) remainder += chars[i];
         words.front() = remainder;
       } else {
+        consumeFrontWord();
         words.erase(words.begin());
         rubyTexts.erase(rubyTexts.begin());
         wordContinues.erase(wordContinues.begin());
@@ -365,7 +514,12 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
 
     // Phase 3: Calculate final positions for justified alignment
     bool isLastLine = words.empty();
-    int gapCount = lineWordsVec.size() - 1;
+    int gapCount = 0;
+    for (size_t i = 1; i < lineWordContinuesVec.size(); ++i) {
+      if (!lineWordContinuesVec[i]) {
+        ++gapCount;
+      }
+    }
     int spareSpace = pageWidth - totalWordWidth;
 
     std::vector<std::string> lineWords;
@@ -382,10 +536,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
         lineRubyTexts.push_back(lineRubyTextsVec[i]);
         lineWordStyles.push_back(lineWordStylesVec[i]);
         if (i < lineWordsVec.size() - 1) {
-          int gap = minSpacing;
-          if (lineWordContinuesVec[i + 1]) {
-            gap = std::max(0, gap - getRubyContinuationTighten(lineRubyTextsVec, i + 1));
-          }
+          const int gap = lineWordContinuesVec[i + 1] ? 0 : minSpacing;
           xpos += lineWordWidths[i] + gap;
         }
       }
@@ -396,6 +547,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
       int extraPixels = spareSpace % gapCount;  // Distribute these across first N gaps
 
       int xpos = 0;
+      int visibleGapIndex = 0;
       for (size_t i = 0; i < lineWordsVec.size(); i++) {
         lineXPos.push_back(static_cast<int16_t>(xpos));
         lineWords.push_back(lineWordsVec[i]);
@@ -403,9 +555,10 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
         lineWordStyles.push_back(lineWordStylesVec[i]);
 
         if (i < lineWordsVec.size() - 1) {
-          int gap = baseSpacing + (static_cast<int>(i) < extraPixels ? 1 : 0);
-          if (lineWordContinuesVec[i + 1]) {
-            gap = std::max(0, gap - getRubyContinuationTighten(lineRubyTextsVec, i + 1));
+          int gap = 0;
+          if (!lineWordContinuesVec[i + 1]) {
+            gap = baseSpacing + (visibleGapIndex < extraPixels ? 1 : 0);
+            ++visibleGapIndex;
           }
           xpos += lineWordWidths[i] + gap;
         }
@@ -416,7 +569,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
     if (!lineWords.empty() && (!isLastLine || includeLastLine)) {
       BlockStyle lineBlockStyle;
       lineBlockStyle.alignment = isLastLine ? CssTextAlign::Left : CssTextAlign::Justify;
-      processLine(std::make_shared<TextBlock>(std::move(lineWords), std::move(lineRubyTexts), std::move(lineXPos),
+      processLine(std::make_shared<TextBlock>(std::move(lineWords), std::move(lineRubyAnnotationsVec), std::move(lineXPos),
                                               std::vector<uint16_t>(lineWordWidths.begin(), lineWordWidths.end()),
                                               std::move(lineWordStyles), lineBlockStyle));
     }
@@ -466,6 +619,18 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
     rubyTexts.erase(rubyTexts.begin(), rubyTexts.begin() + consumed);
     wordStyles.erase(wordStyles.begin(), wordStyles.begin() + consumed);
     wordContinues.erase(wordContinues.begin(), wordContinues.begin() + consumed);
+
+    rubyAnnotations.erase(
+        std::remove_if(rubyAnnotations.begin(), rubyAnnotations.end(),
+                       [consumed](const RubyAnnotation& ruby) {
+                         return static_cast<size_t>(ruby.startWordIndex) + ruby.wordCount <= consumed;
+                       }),
+        rubyAnnotations.end());
+    for (auto& ruby : rubyAnnotations) {
+      if (ruby.startWordIndex >= consumed) {
+        ruby.startWordIndex = static_cast<uint16_t>(ruby.startWordIndex - consumed);
+      }
+    }
   }
 }
 
@@ -707,7 +872,7 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
   }
 
   const std::string& word = words[wordIndex];
-  if (!rubyTexts[wordIndex].empty()) {
+  if (!rubyTexts[wordIndex].empty() || isRubyAnnotatedWord(wordIndex)) {
     return false;
   }
   const auto style = wordStyles[wordIndex];
@@ -756,6 +921,7 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
   words.insert(words.begin() + wordIndex + 1, remainder);
   rubyTexts.insert(rubyTexts.begin() + wordIndex + 1, std::string());
   wordStyles.insert(wordStyles.begin() + wordIndex + 1, style);
+  shiftRubyAnnotationsAfterInsert(wordIndex);
 
   // Continuation flag handling after splitting a word into prefix + remainder.
   //
@@ -880,8 +1046,15 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   // Build line data by moving from the original vectors using index range
   std::vector<std::string> lineWords(std::make_move_iterator(words.begin() + lastBreakAt),
                                      std::make_move_iterator(words.begin() + lineBreak));
-  std::vector<std::string> lineRubyTexts(std::make_move_iterator(rubyTexts.begin() + lastBreakAt),
-                                         std::make_move_iterator(rubyTexts.begin() + lineBreak));
+  std::vector<RubyAnnotation> lineRubyAnnotations;
+  for (const auto& ruby : rubyAnnotations) {
+    const size_t rubyStart = ruby.startWordIndex;
+    const size_t rubyEnd = rubyStart + ruby.wordCount;
+    if (rubyStart >= lastBreakAt && rubyEnd <= lineBreak) {
+      lineRubyAnnotations.push_back(
+          {static_cast<uint16_t>(rubyStart - lastBreakAt), ruby.wordCount, ruby.text});
+    }
+  }
   std::vector<EpdFontFamily::Style> lineWordStyles(wordStyles.begin() + lastBreakAt, wordStyles.begin() + lineBreak);
   std::vector<uint16_t> lineTokenWidths(wordWidths.begin() + lastBreakAt, wordWidths.begin() + lineBreak);
 
@@ -892,10 +1065,9 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   }
 
   for (size_t i = 0; i < lineWords.size(); ++i) {
-    lineTokenWidths[i] =
-        measureTokenWidth(renderer, fontId, rubyFontId, lineWords[i], lineRubyTexts[i], lineWordStyles[i]);
+    lineTokenWidths[i] = measureTokenWidth(renderer, fontId, rubyFontId, lineWords[i], "", lineWordStyles[i]);
   }
 
-  processLine(std::make_shared<TextBlock>(std::move(lineWords), std::move(lineRubyTexts), std::move(lineXPos),
+  processLine(std::make_shared<TextBlock>(std::move(lineWords), std::move(lineRubyAnnotations), std::move(lineXPos),
                                           std::move(lineTokenWidths), std::move(lineWordStyles), blockStyle));
 }

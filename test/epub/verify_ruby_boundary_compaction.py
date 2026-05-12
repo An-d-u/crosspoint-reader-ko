@@ -35,9 +35,21 @@ def main() -> int:
         require(r"wordContinues\.erase\(wordContinues\.begin\(\)\);",
                 parsed,
                 "character-wrap path does not consume continuation flags with words")
-        require(r"if\s*\(\s*lineWordContinuesVec\[i\s*\+\s*1\]\s*\)\s*\{\s*gap\s*=\s*std::max\(\s*0\s*,\s*gap\s*-\s*getRubyContinuationTighten",
+        require(r"int\s+gapCount\s*=\s*0\s*;\s*for\s*\(\s*size_t\s+i\s*=\s*1\s*;\s*i\s*<\s*lineWordContinuesVec\.size\(\)",
                 parsed,
-                "ruby continuation gap is not compacted in line positioning")
+                "character-wrap justification still counts attached ruby characters as visible gaps")
+        require(r"const\s+int\s+gap\s*=\s*lineWordContinuesVec\[i\s*\+\s*1\]\s*\?\s*0\s*:\s*minSpacing\s*;",
+                parsed,
+                "attached ruby base characters are not kept gapless on last lines")
+        require(r"if\s*\(\s*!\s*lineWordsVec\.empty\(\)\s*&&\s*newTotalWidth\s*>\s*pageWidth\s*\)\s*\{\s*break\s*;",
+                parsed,
+                "character-wrap can still append attached ruby text past the page width")
+        require(r"\}\s*else\s+if\s*\(\s*newTotalWidth\s*<=\s*pageWidth\s*&&\s*newSpacing\s*>=\s*minSpacing\s*\)",
+                parsed,
+                "character-wrap can still append attached text past the page width")
+        require(r"if\s*\(\s*!\s*lineWordContinuesVec\[i\s*\+\s*1\]\s*\)\s*\{\s*gap\s*=\s*baseSpacing\s*\+\s*\(visibleGapIndex\s*<\s*extraPixels\s*\?\s*1\s*:\s*0\)",
+                parsed,
+                "attached ruby base characters still receive justified spacing")
         forbid(r"getRubyPairExtraGap\s*\(",
                parsed,
                "ParsedText still applies ruby overlap spacing in the base text layer")

@@ -9,22 +9,29 @@
 #include "Block.h"
 #include "BlockStyle.h"
 
+struct RubyAnnotation {
+  uint16_t startWordIndex;
+  uint16_t wordCount;
+  std::string text;
+};
+
 // Represents a line of text on a page
 class TextBlock final : public Block {
  private:
   std::vector<std::string> words;
-  std::vector<std::string> rubyTexts;
+  std::vector<RubyAnnotation> rubyAnnotations;
   std::vector<int16_t> wordXpos;
   std::vector<uint16_t> tokenWidths;
   std::vector<EpdFontFamily::Style> wordStyles;
   BlockStyle blockStyle;
 
  public:
-  explicit TextBlock(std::vector<std::string> words, std::vector<std::string> rubyTexts, std::vector<int16_t> word_xpos,
-                     std::vector<uint16_t> tokenWidths, std::vector<EpdFontFamily::Style> word_styles,
+  explicit TextBlock(std::vector<std::string> words, std::vector<RubyAnnotation> rubyAnnotations,
+                     std::vector<int16_t> word_xpos, std::vector<uint16_t> tokenWidths,
+                     std::vector<EpdFontFamily::Style> word_styles,
                      const BlockStyle& blockStyle = BlockStyle())
       : words(std::move(words)),
-        rubyTexts(std::move(rubyTexts)),
+        rubyAnnotations(std::move(rubyAnnotations)),
         wordXpos(std::move(word_xpos)),
         tokenWidths(std::move(tokenWidths)),
         wordStyles(std::move(word_styles)),

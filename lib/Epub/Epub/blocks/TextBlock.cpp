@@ -50,22 +50,26 @@ void placeRubyCluster(std::vector<RubyOverlayRun>& rubyRuns, const size_t start,
 }
 
 std::vector<RubyOverlayRun> buildRubyOverlayRuns(const GfxRenderer& renderer, const int rubyFontId,
-                                                 const std::vector<std::string>& rubyTexts,
+                                                 const std::vector<RubyAnnotation>& rubyAnnotations,
                                                  const std::vector<int16_t>& wordXpos,
                                                  const std::vector<uint16_t>& tokenWidths, const int x,
                                                  const int y) {
   std::vector<RubyOverlayRun> rubyRuns;
-  rubyRuns.reserve(rubyTexts.size());
+  rubyRuns.reserve(rubyAnnotations.size());
 
-  for (size_t i = 0; i < rubyTexts.size(); ++i) {
-    if (rubyTexts[i].empty()) {
+  for (const auto& ruby : rubyAnnotations) {
+    if (ruby.text.empty() || ruby.wordCount == 0 || ruby.startWordIndex >= wordXpos.size()) {
       continue;
     }
 
-    const int wordX = wordXpos[i] + x;
-    const int rubyWidth = renderer.getTextAdvanceX(rubyFontId, rubyTexts[i].c_str(), EpdFontFamily::REGULAR);
-    const int preferredX = wordX + (static_cast<int>(tokenWidths[i]) - rubyWidth) / 2;
-    rubyRuns.push_back({rubyTexts[i].c_str(), preferredX, preferredX, y - kRubyTextLiftPx, rubyWidth});
+    const size_t firstIndex = ruby.startWordIndex;
+    const size_t lastIndex = std::min(wordXpos.size() - 1, firstIndex + ruby.wordCount - 1);
+    const int baseX = wordXpos[firstIndex] + x;
+    const int baseRight = wordXpos[lastIndex] + x + tokenWidths[lastIndex];
+    const int baseWidth = baseRight - baseX;
+    const int rubyWidth = renderer.getTextAdvanceX(rubyFontId, ruby.text.c_str(), EpdFontFamily::REGULAR);
+    const int preferredX = baseX + (baseWidth - rubyWidth) / 2;
+    rubyRuns.push_back({ruby.text.c_str(), preferredX, preferredX, y - kRubyTextLiftPx, rubyWidth});
   }
 
   return rubyRuns;
@@ -112,11 +116,25 @@ void resolveRubyRunOverlaps(std::vector<RubyOverlayRun>& rubyRuns) {
     }
   }
 }
+
+void clampRubyRunsToScreen(std::vector<RubyOverlayRun>& rubyRuns, const int screenWidth) {
+  if (screenWidth <= 0) {
+    return;
+  }
+
+  for (auto& rubyRun : rubyRuns) {
+    if (rubyRun.width >= screenWidth) {
+      rubyRun.x = 0;
+      continue;
+    }
+    rubyRun.x = std::max(0, std::min(rubyRun.x, screenWidth - rubyRun.width));
+  }
+}
 }
 
 bool TextBlock::hasRuby() const {
-  for (const auto& rubyText : rubyTexts) {
-    if (!rubyText.empty()) {
+  for (const auto& ruby : rubyAnnotations) {
+    if (!ruby.text.empty()) {
       return true;
     }
   }
@@ -135,10 +153,10 @@ int TextBlock::getRenderedLineHeight(const GfxRenderer& renderer, const int font
 void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int rubyFontId, const int x,
                        const int y) const {
   // Validate iterator bounds before rendering
-  if (words.size() != wordXpos.size() || words.size() != wordStyles.size() || words.size() != rubyTexts.size() ||
+  if (words.size() != wordXpos.size() || words.size() != wordStyles.size() ||
       words.size() != tokenWidths.size()) {
-    LOG_ERR("TXB", "Render skipped: size mismatch (words=%u, xpos=%u, styles=%u, ruby=%u, widths=%u)\n",
-            (uint32_t)words.size(), (uint32_t)wordXpos.size(), (uint32_t)wordStyles.size(), (uint32_t)rubyTexts.size(),
+    LOG_ERR("TXB", "Render skipped: size mismatch (words=%u, xpos=%u, styles=%u, widths=%u)\n",
+            (uint32_t)words.size(), (uint32_t)wordXpos.size(), (uint32_t)wordStyles.size(),
             (uint32_t)tokenWidths.size());
     return;
   }
@@ -177,15 +195,12 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
 
   const int rubyReserve = kRubyBaseYOffsetPx;
   const int baseY = y + rubyReserve;
-  auto rubyRuns = buildRubyOverlayRuns(renderer, rubyFontId, rubyTexts, wordXpos, tokenWidths, x, y);
+  auto rubyRuns = buildRubyOverlayRuns(renderer, rubyFontId, rubyAnnotations, wordXpos, tokenWidths, x, y);
 
   for (size_t i = 0; i < words.size(); i++) {
     const int wordX = wordXpos[i] + x;
     const EpdFontFamily::Style currentStyle = wordStyles[i];
-    const int tokenWidth = tokenWidths[i];
-    const int baseWidth = renderer.getTextAdvanceX(fontId, words[i].c_str(), currentStyle);
-    const int centeredBaseX = wordX + std::max(0, (tokenWidth - baseWidth) / 2);
-    renderer.drawText(fontId, centeredBaseX, baseY, words[i].c_str(), true, currentStyle);
+    renderer.drawText(fontId, wordX, baseY, words[i].c_str(), true, currentStyle);
 
     if ((currentStyle & EpdFontFamily::UNDERLINE) != 0) {
       const std::string& w = words[i];
@@ -193,7 +208,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
       // baseY is the top of the base text line; add ascender to reach baseline, then offset 2px below
       const int underlineY = baseY + renderer.getFontAscenderSize(fontId) + 2;
 
-      int startX = centeredBaseX;
+      int startX = wordX;
       int underlineWidth = fullWordWidth;
 
       // if word starts with em-space ("\xe2\x80\x83"), account for the additional indent before drawing the line
@@ -211,26 +226,33 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
   }
 
   resolveRubyRunOverlaps(rubyRuns);
+  clampRubyRunsToScreen(rubyRuns, renderer.getScreenWidth());
   for (const auto& rubyRun : rubyRuns) {
     renderer.drawText(rubyFontId, rubyRun.x, rubyRun.y, rubyRun.text, true, EpdFontFamily::REGULAR);
   }
 }
 
 bool TextBlock::serialize(FsFile& file) const {
-  if (words.size() != wordXpos.size() || words.size() != wordStyles.size() || words.size() != rubyTexts.size() ||
+  if (words.size() != wordXpos.size() || words.size() != wordStyles.size() ||
       words.size() != tokenWidths.size()) {
-    LOG_ERR("TXB", "Serialization failed: size mismatch (words=%u, xpos=%u, styles=%u, ruby=%u, widths=%u)\n",
-            words.size(), wordXpos.size(), wordStyles.size(), rubyTexts.size(), tokenWidths.size());
+    LOG_ERR("TXB", "Serialization failed: size mismatch (words=%u, xpos=%u, styles=%u, widths=%u)\n",
+            words.size(), wordXpos.size(), wordStyles.size(), tokenWidths.size());
     return false;
   }
 
   // Word data
   serialization::writePod(file, static_cast<uint16_t>(words.size()));
   for (const auto& w : words) serialization::writeString(file, w);
-  for (const auto& rubyText : rubyTexts) serialization::writeString(file, rubyText);
   for (auto x : wordXpos) serialization::writePod(file, x);
   for (auto width : tokenWidths) serialization::writePod(file, width);
   for (auto s : wordStyles) serialization::writePod(file, s);
+
+  serialization::writePod(file, static_cast<uint16_t>(rubyAnnotations.size()));
+  for (const auto& ruby : rubyAnnotations) {
+    serialization::writePod(file, ruby.startWordIndex);
+    serialization::writePod(file, ruby.wordCount);
+    serialization::writeString(file, ruby.text);
+  }
 
   // Style (alignment + margins/padding/indent)
   serialization::writePod(file, blockStyle.alignment);
@@ -252,7 +274,7 @@ bool TextBlock::serialize(FsFile& file) const {
 std::unique_ptr<TextBlock> TextBlock::deserialize(FsFile& file) {
   uint16_t wc;
   std::vector<std::string> words;
-  std::vector<std::string> rubyTexts;
+  std::vector<RubyAnnotation> rubyAnnotations;
   std::vector<int16_t> wordXpos;
   std::vector<uint16_t> tokenWidths;
   std::vector<EpdFontFamily::Style> wordStyles;
@@ -269,15 +291,22 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(FsFile& file) {
 
   // Word data
   words.resize(wc);
-  rubyTexts.resize(wc);
   wordXpos.resize(wc);
   tokenWidths.resize(wc);
   wordStyles.resize(wc);
   for (auto& w : words) serialization::readString(file, w);
-  for (auto& rubyText : rubyTexts) serialization::readString(file, rubyText);
   for (auto& x : wordXpos) serialization::readPod(file, x);
   for (auto& width : tokenWidths) serialization::readPod(file, width);
   for (auto& s : wordStyles) serialization::readPod(file, s);
+
+  uint16_t rubyCount = 0;
+  serialization::readPod(file, rubyCount);
+  rubyAnnotations.resize(rubyCount);
+  for (auto& ruby : rubyAnnotations) {
+    serialization::readPod(file, ruby.startWordIndex);
+    serialization::readPod(file, ruby.wordCount);
+    serialization::readString(file, ruby.text);
+  }
 
   // Style (alignment + margins/padding/indent)
   serialization::readPod(file, blockStyle.alignment);
@@ -294,6 +323,6 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(FsFile& file) {
   serialization::readPod(file, blockStyle.textIndentDefined);
 
   return std::unique_ptr<TextBlock>(
-      new TextBlock(std::move(words), std::move(rubyTexts), std::move(wordXpos), std::move(tokenWidths),
+      new TextBlock(std::move(words), std::move(rubyAnnotations), std::move(wordXpos), std::move(tokenWidths),
                     std::move(wordStyles), blockStyle));
 }

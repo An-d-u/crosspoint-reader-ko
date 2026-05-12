@@ -34,23 +34,29 @@ def main() -> int:
         forbid(r"getRubyPairExtraGap\s*\(",
                parsed_text,
                "base layout still adjusts word spacing for ruby")
-        require(r"const\s+int\s+centeredBaseX\s*=\s*wordX\s*\+\s*std::max\(\s*0\s*,\s*\(\s*tokenWidth\s*-\s*baseWidth\s*\)\s*/\s*2\s*\)\s*;",
-                text_block,
-                "base text is not centered from token width")
+        forbid(r"centeredBaseX",
+               text_block,
+               "ruby render path still recenters base text instead of drawing normal base tokens")
+        forbid(r"getTextAdvanceX\(fontId,\s*words\[i\]\.c_str\(\)",
+               text_block,
+               "ruby render path still remeasures every base token while drawing")
         require(r"struct\s+RubyOverlayRun",
                 text_block,
                 "ruby overlay run structure missing")
         require(r"buildRubyOverlayRuns\s*\(",
                 text_block,
                 "ruby overlay builder missing")
+        require(r"const\s+int\s+baseRight\s*=\s*wordXpos\[lastIndex\]\s*\+\s*x\s*\+\s*tokenWidths\[lastIndex\]\s*;",
+                text_block,
+                "ruby overlay does not use the full annotated base span")
         require(r"resolveRubyRunOverlaps\s*\(",
                 text_block,
                 "ruby overlay overlap resolver missing")
-        require(r"const\s+int\s+preferredX\s*=\s*wordX\s*\+\s*\(\s*static_cast<int>\(tokenWidths\[i\]\)\s*-\s*rubyWidth\s*\)\s*/\s*2\s*;",
+        require(r"const\s+int\s+preferredX\s*=\s*baseX\s*\+\s*\(\s*baseWidth\s*-\s*rubyWidth\s*\)\s*/\s*2\s*;",
                 text_block,
                 "ruby preferred overlay position missing")
         require(r"kRubyTextLiftPx\s*=\s*13\s*;", text_block, "ruby lift was not raised by 2px")
-        require(r"SECTION_FILE_VERSION\s*=\s*28\s*;", section, "section cache version not bumped for ruby layout change")
+        require(r"SECTION_FILE_VERSION\s*=\s*29\s*;", section, "section cache version not bumped for ruby layout change")
     except AssertionError as exc:
         print(exc)
         return 1

@@ -30,7 +30,27 @@ def main() -> int:
         require(
             r"currentTextBlock->addWord\(\s*std::move\(rubyBaseBuffer\)\s*,\s*currentFontStyle\(\)\s*,\s*false\s*,\s*nextWordContinues\s*,\s*std::move\(rubyTextBuffer\)\s*\)",
             parser,
-            "ruby run is not flushed as a single base/ruby token",
+            "ruby run is not flushed through addWord",
+        )
+        require(
+            r"suppressWhitespaceAfterRuby\s*=\s*true\s*;",
+            parser,
+            "parser does not suppress formatting whitespace after ruby",
+        )
+        require(
+            r"if\s*\(\s*self->suppressWhitespaceAfterRuby\s*\)\s*\{\s*self->nextWordContinues\s*=\s*true\s*;\s*continue\s*;",
+            parser,
+            "formatting whitespace after ruby can still break continuation",
+        )
+        require(
+            r"rubyAnnotations\.push_back",
+            parsed,
+            "ruby run is not stored as a separate annotation",
+        )
+        require(
+            r"auto\s+rubyBaseChars\s*=\s*splitUtf8Chars\(word\)",
+            parsed,
+            "ruby base text is not split into normal text tokens",
         )
         require(
             r"return\s+baseWidth\s*;",
@@ -58,7 +78,7 @@ def main() -> int:
             "ruby overlay runs are not drawn in a dedicated second pass",
         )
         require(
-            r"SECTION_FILE_VERSION\s*=\s*28\s*;",
+            r"SECTION_FILE_VERSION\s*=\s*29\s*;",
             section,
             "section cache version not bumped for ruby overlay layout",
         )
