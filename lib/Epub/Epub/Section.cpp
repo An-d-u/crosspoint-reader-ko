@@ -12,7 +12,7 @@
 
 namespace {
 constexpr uint8_t SECTION_FILE_VERSION =
-    26;  // Korean + upstream + grouped ruby-run layout with ruby overhang spacing
+    28;  // Korean + upstream + two-pass ruby overlay layout
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) +
                                  sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint32_t) +

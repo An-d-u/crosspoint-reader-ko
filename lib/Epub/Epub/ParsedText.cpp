@@ -84,30 +84,6 @@ uint16_t measureTokenWidth(const GfxRenderer& renderer, const int fontId, const 
   return baseWidth;
 }
 
-uint16_t measureRubyWidth(const GfxRenderer& renderer, const int rubyFontId, const std::string& rubyText) {
-  if (rubyText.empty()) {
-    return 0;
-  }
-  return renderer.getTextAdvanceX(rubyFontId, rubyText.c_str(), EpdFontFamily::REGULAR);
-}
-
-int getRubyPairExtraGap(const uint16_t leftBaseWidth, const uint16_t leftRubyWidth, const uint16_t rightBaseWidth,
-                        const uint16_t rightRubyWidth, const int currentGap) {
-  if (leftRubyWidth == 0 || rightRubyWidth == 0) {
-    return 0;
-  }
-
-  const int rubyOverhangDelta =
-      static_cast<int>(leftRubyWidth) + static_cast<int>(rightRubyWidth) - static_cast<int>(leftBaseWidth) -
-      static_cast<int>(rightBaseWidth);
-  if (rubyOverhangDelta <= 0) {
-    return 0;
-  }
-
-  const int requiredGap = (rubyOverhangDelta + 1) / 2;
-  return std::max(0, requiredGap - currentGap);
-}
-
 int getRubyContinuationTighten(const std::vector<std::string>& rubyTexts, const size_t nextIndex) {
   if (nextIndex == 0 || nextIndex >= rubyTexts.size()) {
     return 0;
@@ -176,7 +152,6 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
     std::vector<std::string> lineRubyTextsVec;
     std::vector<bool> lineWordContinuesVec;
     std::vector<int> lineWordWidths;
-    std::vector<int> lineRubyWidths;
     std::vector<EpdFontFamily::Style> lineWordStylesVec;
 
     // Phase 1: Greedily collect words/characters to fill the line
@@ -188,15 +163,9 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
       const std::string& rubyText = rubyTexts.front();
       const EpdFontFamily::Style wordStyle = wordStyles.front();
       const int wordWidth = measureTokenWidth(renderer, fontId, rubyFontId, word, rubyText, wordStyle);
-      const int rubyWidth = measureRubyWidth(renderer, rubyFontId, rubyText);
-      const int rubyPairExtra =
-          lineWordsVec.empty() ? 0
-                               : getRubyPairExtraGap(static_cast<uint16_t>(lineWordWidths.back()),
-                                                     static_cast<uint16_t>(lineRubyWidths.back()),
-                                                     static_cast<uint16_t>(wordWidth), static_cast<uint16_t>(rubyWidth), 0);
 
       // Calculate what spacing would be if we add this word
-      int newTotalWidth = totalWordWidth + wordWidth + rubyPairExtra;
+      int newTotalWidth = totalWordWidth + wordWidth;
       int newGapCount = lineWordsVec.size();  // gaps = word count (before adding new word)
       int newSpareSpace = pageWidth - newTotalWidth;
       int newSpacing = (newGapCount > 0) ? (newSpareSpace / newGapCount) : maxSpacing + 1;
@@ -209,7 +178,6 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
           lineRubyTextsVec.push_back(rubyText);
           lineWordContinuesVec.push_back(false);
           lineWordWidths.push_back(wordWidth);
-          lineRubyWidths.push_back(rubyWidth);
           lineWordStylesVec.push_back(wordStyle);
           totalWordWidth = wordWidth;
           words.erase(words.begin());
@@ -222,7 +190,6 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
             lineRubyTextsVec.push_back(rubyText);
             lineWordContinuesVec.push_back(false);
             lineWordWidths.push_back(wordWidth);
-            lineRubyWidths.push_back(rubyWidth);
             lineWordStylesVec.push_back(wordStyle);
             totalWordWidth = wordWidth;
             words.erase(words.begin());
@@ -252,7 +219,6 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
           lineRubyTextsVec.emplace_back();
           lineWordContinuesVec.push_back(attachToPrevious);
           lineWordWidths.push_back(partialWidth);
-          lineRubyWidths.push_back(0);
           lineWordStylesVec.push_back(wordStyle);
           totalWordWidth = partialWidth;
 
@@ -274,7 +240,6 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
         lineRubyTextsVec.push_back(rubyText);
         lineWordContinuesVec.push_back(attachToPrevious);
         lineWordWidths.push_back(wordWidth);
-        lineRubyWidths.push_back(rubyWidth);
         lineWordStylesVec.push_back(wordStyle);
         totalWordWidth = newTotalWidth;
         words.erase(words.begin());
@@ -317,7 +282,6 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
             lineRubyTextsVec.emplace_back();
             lineWordContinuesVec.push_back(attachToPrevious);
             lineWordWidths.push_back(partialWidth);
-            lineRubyWidths.push_back(0);
             lineWordStylesVec.push_back(wordStyle);
             totalWordWidth += partialWidth;
 
@@ -384,7 +348,6 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
       lineRubyTextsVec.emplace_back();
       lineWordContinuesVec.push_back(attachToPrevious);
       lineWordWidths.push_back(partialWidth);
-      lineRubyWidths.push_back(0);
       lineWordStylesVec.push_back(nextStyle);
       totalWordWidth += partialWidth;
 
@@ -423,11 +386,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
           if (lineWordContinuesVec[i + 1]) {
             gap = std::max(0, gap - getRubyContinuationTighten(lineRubyTextsVec, i + 1));
           }
-          const int rubyPairExtra =
-              getRubyPairExtraGap(static_cast<uint16_t>(lineWordWidths[i]), static_cast<uint16_t>(lineRubyWidths[i]),
-                                  static_cast<uint16_t>(lineWordWidths[i + 1]),
-                                  static_cast<uint16_t>(lineRubyWidths[i + 1]), gap);
-          xpos += lineWordWidths[i] + gap + rubyPairExtra;
+          xpos += lineWordWidths[i] + gap;
         }
       }
     } else {
@@ -448,11 +407,7 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
           if (lineWordContinuesVec[i + 1]) {
             gap = std::max(0, gap - getRubyContinuationTighten(lineRubyTextsVec, i + 1));
           }
-          const int rubyPairExtra =
-              getRubyPairExtraGap(static_cast<uint16_t>(lineWordWidths[i]), static_cast<uint16_t>(lineRubyWidths[i]),
-                                  static_cast<uint16_t>(lineWordWidths[i + 1]),
-                                  static_cast<uint16_t>(lineRubyWidths[i + 1]), gap);
-          xpos += lineWordWidths[i] + gap + rubyPairExtra;
+          xpos += lineWordWidths[i] + gap;
         }
       }
     }
@@ -582,10 +537,6 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
         // Cross-boundary kerning for continuation words (e.g. nonbreaking spaces, attached punctuation)
         gap = renderer.getKerning(fontId, lastCodepoint(words[j - 1]), firstCodepoint(words[j]), wordStyles[j - 1]);
       }
-      if (j > static_cast<size_t>(i)) {
-        gap += getRubyPairExtraGap(wordWidths[j - 1], measureRubyWidth(renderer, rubyFontId, rubyTexts[j - 1]),
-                                   wordWidths[j], measureRubyWidth(renderer, rubyFontId, rubyTexts[j]), gap);
-      }
       currlen += wordWidths[j] + gap;
 
       if (currlen > effectivePageWidth) {
@@ -702,12 +653,6 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
         // Cross-boundary kerning for continuation words (e.g. nonbreaking spaces, attached punctuation)
         spacing = renderer.getKerning(fontId, lastCodepoint(words[currentIndex - 1]),
                                       firstCodepoint(words[currentIndex]), wordStyles[currentIndex - 1]);
-      }
-      if (!isFirstWord) {
-        spacing += getRubyPairExtraGap(wordWidths[currentIndex - 1],
-                                       measureRubyWidth(renderer, rubyFontId, rubyTexts[currentIndex - 1]),
-                                       wordWidths[currentIndex], measureRubyWidth(renderer, rubyFontId, rubyTexts[currentIndex]),
-                                       spacing);
       }
       const int candidateWidth = spacing + wordWidths[currentIndex];
 
@@ -870,24 +815,17 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     lineWordWidthSum += wordWidths[lastBreakAt + wordIdx];
     // Count gaps: each word after the first creates a gap, unless it's a continuation
     if (wordIdx > 0) {
-      int naturalGap = 0;
       if (!continuesVec[lastBreakAt + wordIdx]) {
         actualGapCount++;
-        naturalGap = renderer.getSpaceAdvance(fontId, lastCodepoint(words[lastBreakAt + wordIdx - 1]),
-                                              firstCodepoint(words[lastBreakAt + wordIdx]),
-                                              wordStyles[lastBreakAt + wordIdx - 1]);
+        totalNaturalGaps += renderer.getSpaceAdvance(fontId, lastCodepoint(words[lastBreakAt + wordIdx - 1]),
+                                                     firstCodepoint(words[lastBreakAt + wordIdx]),
+                                                     wordStyles[lastBreakAt + wordIdx - 1]);
       } else {
         // Cross-boundary kerning for continuation words (e.g. nonbreaking spaces, attached punctuation)
-        naturalGap = renderer.getKerning(fontId, lastCodepoint(words[lastBreakAt + wordIdx - 1]),
-                                         firstCodepoint(words[lastBreakAt + wordIdx]),
-                                         wordStyles[lastBreakAt + wordIdx - 1]);
+        totalNaturalGaps += renderer.getKerning(fontId, lastCodepoint(words[lastBreakAt + wordIdx - 1]),
+                                                firstCodepoint(words[lastBreakAt + wordIdx]),
+                                                wordStyles[lastBreakAt + wordIdx - 1]);
       }
-      totalNaturalGaps += naturalGap;
-      totalNaturalGaps +=
-          getRubyPairExtraGap(wordWidths[lastBreakAt + wordIdx - 1],
-                              measureRubyWidth(renderer, rubyFontId, rubyTexts[lastBreakAt + wordIdx - 1]),
-                              wordWidths[lastBreakAt + wordIdx],
-                              measureRubyWidth(renderer, rubyFontId, rubyTexts[lastBreakAt + wordIdx]), naturalGap);
     }
   }
 
@@ -922,13 +860,8 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     if (nextIsContinuation) {
       int advance = wordWidths[lastBreakAt + wordIdx];
       // Cross-boundary kerning for continuation words (e.g. nonbreaking spaces, attached punctuation)
-      int gap = renderer.getKerning(fontId, lastCodepoint(words[lastBreakAt + wordIdx]),
-                                    firstCodepoint(words[lastBreakAt + wordIdx + 1]), wordStyles[lastBreakAt + wordIdx]);
-      gap += getRubyPairExtraGap(wordWidths[lastBreakAt + wordIdx],
-                                 measureRubyWidth(renderer, rubyFontId, rubyTexts[lastBreakAt + wordIdx]),
-                                 wordWidths[lastBreakAt + wordIdx + 1],
-                                 measureRubyWidth(renderer, rubyFontId, rubyTexts[lastBreakAt + wordIdx + 1]), gap);
-      advance += gap;
+      advance += renderer.getKerning(fontId, lastCodepoint(words[lastBreakAt + wordIdx]),
+                                     firstCodepoint(words[lastBreakAt + wordIdx + 1]), wordStyles[lastBreakAt + wordIdx]);
       xpos += advance;
     } else {
       int gap = 0;
@@ -939,10 +872,6 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
         if (blockStyle.alignment == CssTextAlign::Justify && !isLastLine) {
           gap += justifyExtra;
         }
-        gap += getRubyPairExtraGap(wordWidths[lastBreakAt + wordIdx],
-                                   measureRubyWidth(renderer, rubyFontId, rubyTexts[lastBreakAt + wordIdx]),
-                                   wordWidths[lastBreakAt + wordIdx + 1],
-                                   measureRubyWidth(renderer, rubyFontId, rubyTexts[lastBreakAt + wordIdx + 1]), gap);
       }
       xpos += wordWidths[lastBreakAt + wordIdx] + gap;
     }

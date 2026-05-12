@@ -1,6 +1,8 @@
 #include "TextBlock.h"
 
 #include <algorithm>
+#include <cmath>
+#include <vector>
 
 #include <GfxRenderer.h>
 #include <Logging.h>
@@ -10,6 +12,106 @@ namespace {
 constexpr int kRubyLineExtraPx = 2;
 constexpr int kRubyBaseYOffsetPx = 2;
 constexpr int kRubyTextLiftPx = 13;
+
+struct RubyOverlayRun {
+  const char* text;
+  int preferredX;
+  int x;
+  int y;
+  int width;
+};
+
+void placeRubyCluster(std::vector<RubyOverlayRun>& rubyRuns, const size_t start, const size_t endExclusive) {
+  if (start >= endExclusive) {
+    return;
+  }
+
+  if (endExclusive - start == 1) {
+    rubyRuns[start].x = rubyRuns[start].preferredX;
+    return;
+  }
+
+  double weightedCenterSum = 0.0;
+  int totalWeight = 0;
+  int totalWidth = 0;
+  for (size_t i = start; i < endExclusive; ++i) {
+    const int weight = std::max(1, rubyRuns[i].width);
+    weightedCenterSum += (rubyRuns[i].preferredX + rubyRuns[i].width / 2.0) * weight;
+    totalWeight += weight;
+    totalWidth += rubyRuns[i].width;
+  }
+
+  const double clusterCenter = weightedCenterSum / std::max(1, totalWeight);
+  int currentX = static_cast<int>(std::lround(clusterCenter - totalWidth / 2.0));
+  for (size_t i = start; i < endExclusive; ++i) {
+    rubyRuns[i].x = currentX;
+    currentX += rubyRuns[i].width;
+  }
+}
+
+std::vector<RubyOverlayRun> buildRubyOverlayRuns(const GfxRenderer& renderer, const int rubyFontId,
+                                                 const std::vector<std::string>& rubyTexts,
+                                                 const std::vector<int16_t>& wordXpos,
+                                                 const std::vector<uint16_t>& tokenWidths, const int x,
+                                                 const int y) {
+  std::vector<RubyOverlayRun> rubyRuns;
+  rubyRuns.reserve(rubyTexts.size());
+
+  for (size_t i = 0; i < rubyTexts.size(); ++i) {
+    if (rubyTexts[i].empty()) {
+      continue;
+    }
+
+    const int wordX = wordXpos[i] + x;
+    const int rubyWidth = renderer.getTextAdvanceX(rubyFontId, rubyTexts[i].c_str(), EpdFontFamily::REGULAR);
+    const int preferredX = wordX + (static_cast<int>(tokenWidths[i]) - rubyWidth) / 2;
+    rubyRuns.push_back({rubyTexts[i].c_str(), preferredX, preferredX, y - kRubyTextLiftPx, rubyWidth});
+  }
+
+  return rubyRuns;
+}
+
+void resolveRubyRunOverlaps(std::vector<RubyOverlayRun>& rubyRuns) {
+  if (rubyRuns.size() < 2) {
+    return;
+  }
+
+  size_t clusterStart = 0;
+  while (clusterStart < rubyRuns.size()) {
+    size_t clusterEnd = clusterStart + 1;
+    int preferredRight = rubyRuns[clusterStart].preferredX + rubyRuns[clusterStart].width;
+    while (clusterEnd < rubyRuns.size() && rubyRuns[clusterEnd].preferredX < preferredRight) {
+      preferredRight = std::max(preferredRight, rubyRuns[clusterEnd].preferredX + rubyRuns[clusterEnd].width);
+      ++clusterEnd;
+    }
+    placeRubyCluster(rubyRuns, clusterStart, clusterEnd);
+    clusterStart = clusterEnd;
+  }
+
+  bool merged = true;
+  while (merged) {
+    merged = false;
+    for (size_t i = 1; i < rubyRuns.size(); ++i) {
+      if (rubyRuns[i - 1].x + rubyRuns[i - 1].width <= rubyRuns[i].x) {
+        continue;
+      }
+
+      size_t overlapStart = i - 1;
+      while (overlapStart > 0 && rubyRuns[overlapStart - 1].x + rubyRuns[overlapStart - 1].width > rubyRuns[overlapStart].x) {
+        --overlapStart;
+      }
+
+      size_t overlapEnd = i + 1;
+      while (overlapEnd < rubyRuns.size() && rubyRuns[overlapEnd - 1].x + rubyRuns[overlapEnd - 1].width > rubyRuns[overlapEnd].x) {
+        ++overlapEnd;
+      }
+
+      placeRubyCluster(rubyRuns, overlapStart, overlapEnd);
+      merged = true;
+      break;
+    }
+  }
+}
 }
 
 bool TextBlock::hasRuby() const {
@@ -75,6 +177,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
 
   const int rubyReserve = kRubyBaseYOffsetPx;
   const int baseY = y + rubyReserve;
+  auto rubyRuns = buildRubyOverlayRuns(renderer, rubyFontId, rubyTexts, wordXpos, tokenWidths, x, y);
 
   for (size_t i = 0; i < words.size(); i++) {
     const int wordX = wordXpos[i] + x;
@@ -83,13 +186,6 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
     const int baseWidth = renderer.getTextAdvanceX(fontId, words[i].c_str(), currentStyle);
     const int centeredBaseX = wordX + std::max(0, (tokenWidth - baseWidth) / 2);
     renderer.drawText(fontId, centeredBaseX, baseY, words[i].c_str(), true, currentStyle);
-
-    if (!rubyTexts[i].empty()) {
-      const int rubyWidth = renderer.getTextAdvanceX(rubyFontId, rubyTexts[i].c_str(), EpdFontFamily::REGULAR);
-      const int centeredRubyX = wordX + (tokenWidth - rubyWidth) / 2;
-      const int rubyY = y - kRubyTextLiftPx;
-      renderer.drawText(rubyFontId, centeredRubyX, rubyY, rubyTexts[i].c_str(), true, EpdFontFamily::REGULAR);
-    }
 
     if ((currentStyle & EpdFontFamily::UNDERLINE) != 0) {
       const std::string& w = words[i];
@@ -112,6 +208,11 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
 
       renderer.drawLine(startX, underlineY, startX + underlineWidth, underlineY, true);
     }
+  }
+
+  resolveRubyRunOverlaps(rubyRuns);
+  for (const auto& rubyRun : rubyRuns) {
+    renderer.drawText(rubyFontId, rubyRun.x, rubyRun.y, rubyRun.text, true, EpdFontFamily::REGULAR);
   }
 }
 

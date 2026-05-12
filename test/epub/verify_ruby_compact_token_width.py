@@ -25,26 +25,32 @@ def main() -> int:
     section = SECTION_CPP.read_text(encoding="utf-8")
 
     try:
-        require(r"uint16_t\s+measureRubyWidth\(",
-                parsed_text,
-                "ruby width helper missing")
         require(r"\(void\)rubyFontId\s*;\s*\(void\)rubyText\s*;\s*return\s+baseWidth\s*;",
                 parsed_text,
                 "layout width is still inflated by ruby width")
-        require(r"if\s*\(\s*leftRubyWidth\s*==\s*0\s*\|\|\s*rightRubyWidth\s*==\s*0\s*\)\s*\{\s*return\s+0\s*;\s*\}",
-                parsed_text,
-                "ruby pair gap helper should ignore isolated ruby tokens")
-        require(r"const\s+int\s+requiredGap\s*=\s*\(\s*rubyOverhangDelta\s*\+\s*1\s*\)\s*/\s*2\s*;",
-                parsed_text,
-                "ruby pair gap helper does not compute minimal overlap-free spacing")
+        forbid(r"measureRubyWidth\s*\(",
+               parsed_text,
+               "base layout still measures ruby width")
+        forbid(r"getRubyPairExtraGap\s*\(",
+               parsed_text,
+               "base layout still adjusts word spacing for ruby")
         require(r"const\s+int\s+centeredBaseX\s*=\s*wordX\s*\+\s*std::max\(\s*0\s*,\s*\(\s*tokenWidth\s*-\s*baseWidth\s*\)\s*/\s*2\s*\)\s*;",
                 text_block,
                 "base text is not centered from token width")
-        require(r"const\s+int\s+centeredRubyX\s*=\s*wordX\s*\+\s*\(\s*tokenWidth\s*-\s*rubyWidth\s*\)\s*/\s*2\s*;",
+        require(r"struct\s+RubyOverlayRun",
                 text_block,
-                "ruby text is not allowed to overhang from base token width")
+                "ruby overlay run structure missing")
+        require(r"buildRubyOverlayRuns\s*\(",
+                text_block,
+                "ruby overlay builder missing")
+        require(r"resolveRubyRunOverlaps\s*\(",
+                text_block,
+                "ruby overlay overlap resolver missing")
+        require(r"const\s+int\s+preferredX\s*=\s*wordX\s*\+\s*\(\s*static_cast<int>\(tokenWidths\[i\]\)\s*-\s*rubyWidth\s*\)\s*/\s*2\s*;",
+                text_block,
+                "ruby preferred overlay position missing")
         require(r"kRubyTextLiftPx\s*=\s*13\s*;", text_block, "ruby lift was not raised by 2px")
-        require(r"SECTION_FILE_VERSION\s*=\s*26\s*;", section, "section cache version not bumped for ruby layout change")
+        require(r"SECTION_FILE_VERSION\s*=\s*28\s*;", section, "section cache version not bumped for ruby layout change")
     except AssertionError as exc:
         print(exc)
         return 1

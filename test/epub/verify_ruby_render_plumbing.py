@@ -23,7 +23,11 @@ def main() -> int:
                 "rt tag handling")
         require(r"page->render\(renderer,\s*SETTINGS\.getReaderFontId\(\),\s*UI_FONT_ID,",
                 ROOT / "src/activities/reader/EpubReaderActivity.cpp", "reader ruby font render call")
-        require(r"SECTION_FILE_VERSION\s*=\s*26", ROOT / "lib/Epub/Epub/Section.cpp",
+        require(r"buildRubyOverlayRuns\s*\(", ROOT / "lib/Epub/Epub/blocks/TextBlock.cpp",
+                "ruby overlay builder")
+        require(r"resolveRubyRunOverlaps\s*\(", ROOT / "lib/Epub/Epub/blocks/TextBlock.cpp",
+                "ruby overlay overlap resolver")
+        require(r"SECTION_FILE_VERSION\s*=\s*28", ROOT / "lib/Epub/Epub/Section.cpp",
                 "section cache version bump for ruby serialization")
     except AssertionError as exc:
         print(exc)

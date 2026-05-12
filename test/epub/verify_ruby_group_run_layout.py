@@ -32,40 +32,35 @@ def main() -> int:
             parser,
             "ruby run is not flushed as a single base/ruby token",
         )
-        forbid(
-            r"for\s*\(\s*auto&\s*\[\s*baseText\s*,\s*rubyText\s*\]\s*:\s*rubySegments\s*\)",
-            parser,
-            "ruby flush still iterates per-segment instead of group-run output",
-        )
-        require(
-            r"uint16_t\s+measureRubyWidth\(",
-            parsed,
-            "ruby width helper missing",
-        )
         require(
             r"return\s+baseWidth\s*;",
             parsed,
             "layout width no longer follows base text width",
         )
-        require(
-            r"int\s+getRubyPairExtraGap\(",
+        forbid(
+            r"getRubyPairExtraGap\s*\(",
             parsed,
-            "ruby pair gap helper missing",
+            "ruby spacing logic still lives in ParsedText instead of the overlay layer",
         )
         require(
-            r"const\s+int\s+centeredBaseX\s*=\s*wordX\s*\+\s*std::max\(\s*0\s*,\s*\(\s*tokenWidth\s*-\s*baseWidth\s*\)\s*/\s*2\s*\)\s*;",
+            r"auto\s+rubyRuns\s*=\s*buildRubyOverlayRuns\(",
             textblock,
-            "base text is not centered within the shared ruby token width",
+            "ruby overlay runs are not built in a second pass",
         )
         require(
-            r"const\s+int\s+centeredRubyX\s*=\s*wordX\s*\+\s*\(\s*tokenWidth\s*-\s*rubyWidth\s*\)\s*/\s*2\s*;",
+            r"resolveRubyRunOverlaps\s*\(\s*rubyRuns\s*\)",
             textblock,
-            "ruby text is not allowed to overhang from the base token width",
+            "ruby overlay overlaps are not resolved in TextBlock",
         )
         require(
-            r"SECTION_FILE_VERSION\s*=\s*26\s*;",
+            r"for\s*\(\s*const\s+auto&\s+rubyRun\s*:\s*rubyRuns\s*\)\s*\{\s*renderer\.drawText\(rubyFontId,\s*rubyRun\.x,\s*rubyRun\.y,\s*rubyRun\.text,",
+            textblock,
+            "ruby overlay runs are not drawn in a dedicated second pass",
+        )
+        require(
+            r"SECTION_FILE_VERSION\s*=\s*28\s*;",
             section,
-            "section cache version not bumped for grouped ruby layout",
+            "section cache version not bumped for ruby overlay layout",
         )
     except AssertionError as exc:
         print(exc)
