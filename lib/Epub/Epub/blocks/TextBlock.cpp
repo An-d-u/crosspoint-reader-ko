@@ -86,8 +86,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
 
     if (!rubyTexts[i].empty()) {
       const int rubyWidth = renderer.getTextAdvanceX(rubyFontId, rubyTexts[i].c_str(), EpdFontFamily::REGULAR);
-      const int baseCenterX = centeredBaseX + (baseWidth / 2);
-      const int centeredRubyX = baseCenterX - (rubyWidth / 2);
+      const int centeredRubyX = wordX + (tokenWidth - rubyWidth) / 2;
       const int rubyY = y - kRubyTextLiftPx;
       renderer.drawText(rubyFontId, centeredRubyX, rubyY, rubyTexts[i].c_str(), true, EpdFontFamily::REGULAR);
     }

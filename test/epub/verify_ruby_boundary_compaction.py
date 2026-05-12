@@ -37,6 +37,12 @@ def main() -> int:
         require(r"// Add partial[\s\S]*?const\s+bool\s+attachToPrevious\s*=\s*wordContinues\.front\(\)\s*;[\s\S]*?lineWordContinuesVec\.push_back\(attachToPrevious\)",
                 text,
                 "phase 2 partial fill path does not preserve continuation flags")
+        require(r"getRubyPairExtraGap\(\s*static_cast<uint16_t>\(lineWordWidths\[i\]\)",
+                text,
+                "character-wrap positioning does not add ruby pair spacing only where needed")
+        require(r"gap\s*\+=\s*getRubyPairExtraGap\(\s*wordWidths\[lastBreakAt\s*\+\s*wordIdx\]",
+                text,
+                "normal line extraction does not add ruby pair spacing")
     except AssertionError as exc:
         print(exc)
         return 1

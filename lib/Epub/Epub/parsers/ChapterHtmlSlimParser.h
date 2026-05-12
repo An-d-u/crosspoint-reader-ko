@@ -92,7 +92,6 @@ class ChapterHtmlSlimParser {
   bool insideRubyFallbackParen = false;
   std::string rubyBaseBuffer;
   std::string rubyTextBuffer;
-  std::vector<std::pair<std::string, std::string>> rubySegments;
   bool insideSvgWrapper = false;
   int svgWrapperDepth = -1;
   bool svgWrapperHandledImage = false;
@@ -104,7 +103,6 @@ class ChapterHtmlSlimParser {
   EpdFontFamily::Style currentFontStyle() const;
   void startNewTextBlock(const BlockStyle& blockStyle);
   void flushPartWordBuffer();
-  void flushPendingRubySegment();
   void flushRubyToTextBlock();
   void makePages();
   bool tryHandleRasterImage(const std::string& rawHref, const std::string& alt, const std::string& classAttr,

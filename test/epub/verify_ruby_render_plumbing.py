@@ -17,13 +17,13 @@ def main() -> int:
         require(r"rubyTexts", ROOT / "lib/Epub/Epub/ParsedText.h", "ParsedText ruby storage")
         require(r"rubyTexts", ROOT / "lib/Epub/Epub/blocks/TextBlock.h", "TextBlock ruby storage")
         require(r"rubyFontId", ROOT / "lib/Epub/Epub/Page.h", "Page render ruby font plumbing")
-        require(r"strcmp\(name,\s*\"ruby\"\)", ROOT / "lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp",
+        require(r"tagLocalEquals\(name,\s*\"ruby\"\)", ROOT / "lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp",
                 "ruby tag handling")
-        require(r"strcmp\(name,\s*\"rt\"\)", ROOT / "lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp",
+        require(r"tagLocalEquals\(name,\s*\"rt\"\)", ROOT / "lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp",
                 "rt tag handling")
         require(r"page->render\(renderer,\s*SETTINGS\.getReaderFontId\(\),\s*UI_FONT_ID,",
                 ROOT / "src/activities/reader/EpubReaderActivity.cpp", "reader ruby font render call")
-        require(r"SECTION_FILE_VERSION\s*=\s*22", ROOT / "lib/Epub/Epub/Section.cpp",
+        require(r"SECTION_FILE_VERSION\s*=\s*26", ROOT / "lib/Epub/Epub/Section.cpp",
                 "section cache version bump for ruby serialization")
     except AssertionError as exc:
         print(exc)

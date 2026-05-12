@@ -223,43 +223,19 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   nextWordContinues = false;
 }
 
-void ChapterHtmlSlimParser::flushPendingRubySegment() {
-  if (rubyBaseBuffer.empty() && rubyTextBuffer.empty()) {
-    return;
-  }
-
-  if (!rubyBaseBuffer.empty()) {
-    rubySegments.emplace_back(std::move(rubyBaseBuffer), std::move(rubyTextBuffer));
-  }
-
-  rubyBaseBuffer.clear();
-  rubyTextBuffer.clear();
-}
-
 void ChapterHtmlSlimParser::flushRubyToTextBlock() {
   if (!currentTextBlock) {
-    rubySegments.clear();
     rubyBaseBuffer.clear();
     rubyTextBuffer.clear();
     return;
   }
 
-  flushPendingRubySegment();
-
-  bool attachToPrevious = nextWordContinues;
-  for (auto& [baseText, rubyText] : rubySegments) {
-    if (baseText.empty()) {
-      continue;
-    }
-    currentTextBlock->addWord(std::move(baseText), currentFontStyle(), false, attachToPrevious, std::move(rubyText));
-    attachToPrevious = true;
-  }
-
-  if (!rubySegments.empty()) {
+  if (!rubyBaseBuffer.empty()) {
+    currentTextBlock->addWord(std::move(rubyBaseBuffer), currentFontStyle(), false, nextWordContinues,
+                              std::move(rubyTextBuffer));
     nextWordContinues = true;
   }
 
-  rubySegments.clear();
   rubyBaseBuffer.clear();
   rubyTextBuffer.clear();
 }
@@ -508,7 +484,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->insideRubyFallbackParen = false;
     self->rubyBaseBuffer.clear();
     self->rubyTextBuffer.clear();
-    self->rubySegments.clear();
     self->depth += 1;
     return;
   }
@@ -516,13 +491,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   if (self->insideRuby && tagLocalEquals(name, "rt")) {
     self->insideRubyText = true;
     self->insideRubyFallbackParen = false;
-    self->rubyTextBuffer.clear();
     self->depth += 1;
     return;
   }
 
   if (self->insideRuby && tagLocalEquals(name, "rb")) {
-    self->flushPendingRubySegment();
     self->insideRubyText = false;
     self->insideRubyFallbackParen = false;
     self->depth += 1;
@@ -1127,7 +1100,6 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     if (tagLocalEquals(name, "rt")) {
       self->insideRubyText = false;
       self->insideRubyFallbackParen = false;
-      self->flushPendingRubySegment();
       return;
     }
 
