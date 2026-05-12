@@ -3,9 +3,9 @@
 KoPubWorld 기본 폰트에 일본어 fallback font stack을 결합한 builtin header를 생성한다.
 
 기본 정책:
-- UI: KoPubWorld Dotum -> Meiryo UI Regular
-- Reader: KoPubWorld Batang -> Yu Mincho
-- 성능 우선: kana + 핵심 일본어 기호 + 실제 책/일반 일본어 보강 한자만 추가
+- UI: KoPubWorld Dotum, 일본어는 Yu Mincho
+- Reader: KoPubWorld Batang, 일본어는 Yu Mincho
+- 성능 우선: kana + 핵심 일본어 기호 + 실제 책/일반 일본어 보강 한자만 비압축으로 추가
 """
 
 from __future__ import annotations
@@ -42,15 +42,11 @@ KOREAN_INTERVALS = [
 ]
 
 JAPANESE_INTERVALS = [
-    "0x3000,0x3002",
-    "0x3005,0x3007",
-    "0x300C,0x3011",
-    "0x301C,0x301C",
+    "0x3000,0x303F",
     "0x3040,0x309F",
     "0x30A0,0x30FF",
     "0x31F0,0x31FF",
-    "0xFF5E,0xFF5E",
-    "0xFF60,0xFF9F",
+    "0xFF01,0xFF9F",
 ]
 
 EXCLUDED_INTERVALS = [
@@ -85,9 +81,8 @@ def build_jobs() -> list[FontJob]:
             name="kopubworld_dotum_jp_10_regular",
             size=10,
             primary_path=USER_FONT_DIR / "KoPubWorld Dotum_Pro Medium.otf",
-            fallback_path=Path(r"C:\Windows\Fonts\meiryo.ttc"),
+            fallback_path=Path(r"C:\Windows\Fonts\yumin.ttf"),
             output_path=BUILTIN_DIR / "kopubworld_dotum_jp_10_regular.h",
-            ttc_index=2,
         ),
         FontJob(
             name="kopubworld_batang_jp_14_regular",
@@ -152,11 +147,26 @@ def build_forced_non_cjk_intervals(job: FontJob, resolved_fallback_path: Path) -
     return format_intervals(merge_codepoints_to_intervals(exportable_non_cjk))
 
 
+def build_fallback_only_intervals(resolved_fallback_path: Path) -> list[str]:
+    fallback_all = load_font_codepoints(resolved_fallback_path)
+    japanese_non_cjk: set[int] = set()
+    for interval in JAPANESE_INTERVALS:
+        start, end = (int(n, base=0) for n in interval.split(","))
+        japanese_non_cjk.update(range(start, end + 1))
+
+    book_cjk = collect_book_cjk_codepoints(BOOKS_DIR)
+    common_cjk = collect_common_japanese_codepoints()
+    fallback_only = (japanese_non_cjk | book_cjk | common_cjk) & fallback_all
+    return format_intervals(merge_codepoints_to_intervals(fallback_only))
+
+
 def build_fontconvert_command(job: FontJob, resolved_fallback_path: Path, compress: bool) -> list[str]:
     cjk_intervals = build_cjk_intervals(job, resolved_fallback_path)
     forced_non_cjk_intervals = build_forced_non_cjk_intervals(job, resolved_fallback_path)
+    fallback_only_intervals = build_fallback_only_intervals(resolved_fallback_path)
     interval_file = CACHE_FONT_DIR / f"{job.name}-additional-intervals.txt"
     forced_interval_file = CACHE_FONT_DIR / f"{job.name}-forced-intervals.txt"
+    fallback_only_interval_file = CACHE_FONT_DIR / f"{job.name}-fallback-only-intervals.txt"
     interval_file.parent.mkdir(parents=True, exist_ok=True)
     interval_file.write_text(
         "\n".join(KOREAN_INTERVALS + JAPANESE_INTERVALS + cjk_intervals) + "\n",
@@ -165,6 +175,11 @@ def build_fontconvert_command(job: FontJob, resolved_fallback_path: Path, compre
     )
     forced_interval_file.write_text(
         "\n".join(forced_non_cjk_intervals) + ("\n" if forced_non_cjk_intervals else ""),
+        encoding="utf-8",
+        newline="\n",
+    )
+    fallback_only_interval_file.write_text(
+        "\n".join(fallback_only_intervals) + ("\n" if fallback_only_intervals else ""),
         encoding="utf-8",
         newline="\n",
     )
@@ -181,6 +196,8 @@ def build_fontconvert_command(job: FontJob, resolved_fallback_path: Path, compre
         str(interval_file),
         "--forced-intervals-file",
         str(forced_interval_file),
+        "--fallback-only-intervals-file",
+        str(fallback_only_interval_file),
     ]
     if compress:
         command.append("--compress")
@@ -216,9 +233,12 @@ def run_job(job: FontJob, check_only: bool, compress: bool) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate builtin KoPubWorld + Japanese fallback font headers")
     parser.add_argument("--check", action="store_true", help="Resolve inputs and print commands without generating")
-    parser.add_argument("--uncompressed", action="store_true", help="Generate uncompressed fonts instead of compressed grouped fonts")
+    parser.add_argument("--compress", action="store_true", help="Generate compressed grouped fonts instead of the default uncompressed fonts")
+    parser.add_argument("--uncompressed", action="store_true", help="Deprecated compatibility flag; uncompressed is already the default")
     args = parser.parse_args()
-    compress = not args.uncompressed
+    if args.compress and args.uncompressed:
+        parser.error("--compress and --uncompressed cannot be used together")
+    compress = args.compress
 
     for job in build_jobs():
         run_job(job, check_only=args.check, compress=compress)

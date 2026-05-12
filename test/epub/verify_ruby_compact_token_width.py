@@ -55,8 +55,8 @@ def main() -> int:
         require(r"const\s+int\s+preferredX\s*=\s*baseX\s*\+\s*\(\s*baseWidth\s*-\s*rubyWidth\s*\)\s*/\s*2\s*;",
                 text_block,
                 "ruby preferred overlay position missing")
-        require(r"kRubyTextLiftPx\s*=\s*13\s*;", text_block, "ruby lift was not raised by 2px")
-        require(r"SECTION_FILE_VERSION\s*=\s*29\s*;", section, "section cache version not bumped for ruby layout change")
+        require(r"kRubyTextLiftPx\s*=\s*19\s*;", text_block, "ruby lift was not raised for Yu Mincho metrics")
+        require(r"SECTION_FILE_VERSION\s*=\s*30\s*;", section, "section cache version not bumped for ruby layout change")
     except AssertionError as exc:
         print(exc)
         return 1

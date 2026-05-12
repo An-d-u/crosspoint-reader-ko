@@ -28,7 +28,7 @@ def main() -> int:
                 "ruby overlay builder")
         require(r"resolveRubyRunOverlaps\s*\(", ROOT / "lib/Epub/Epub/blocks/TextBlock.cpp",
                 "ruby overlay overlap resolver")
-        require(r"SECTION_FILE_VERSION\s*=\s*29", ROOT / "lib/Epub/Epub/Section.cpp",
+        require(r"SECTION_FILE_VERSION\s*=\s*30", ROOT / "lib/Epub/Epub/Section.cpp",
                 "section cache version bump for ruby serialization")
     except AssertionError as exc:
         print(exc)

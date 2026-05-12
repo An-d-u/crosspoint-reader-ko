@@ -78,7 +78,7 @@ def main() -> int:
             "ruby overlay runs are not drawn in a dedicated second pass",
         )
         require(
-            r"SECTION_FILE_VERSION\s*=\s*29\s*;",
+            r"SECTION_FILE_VERSION\s*=\s*30\s*;",
             section,
             "section cache version not bumped for ruby overlay layout",
         )

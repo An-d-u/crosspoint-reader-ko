@@ -23,6 +23,10 @@ parser.add_argument("--forced-intervals-file", dest="forced_intervals_file",
 parser.add_argument("--exclude-intervals", dest="exclude_intervals", action="append", help="Unicode intervals to exclude from export as min,max. This argument can be repeated.")
 parser.add_argument("--primary-only-intervals", dest="primary_only_intervals", action="append",
                     help="Unicode intervals that may only be exported when the primary font contains the glyph.")
+parser.add_argument("--fallback-only-intervals", dest="fallback_only_intervals", action="append",
+                    help="Unicode intervals that must skip the primary font and be exported from fallback fonts only.")
+parser.add_argument("--fallback-only-intervals-file", dest="fallback_only_intervals_file",
+                    help="Path to a text file containing fallback-only code point intervals as min,max, one per line.")
 parser.add_argument("--compress", dest="compress", action="store_true", help="Compress glyph bitmaps using DEFLATE with group-based compression.")
 parser.add_argument("--force-autohint", dest="force_autohint", action="store_true", help="Force FreeType auto-hinter instead of native font hinting. Improves stem width consistency for fonts with weak or no native TrueType hints.")
 args = parser.parse_args()
@@ -162,6 +166,17 @@ primary_only_ints = []
 if args.primary_only_intervals:
     primary_only_ints = [tuple([int(n, base=0) for n in i.split(",")]) for i in args.primary_only_intervals]
 
+fallback_only_ints = []
+if args.fallback_only_intervals:
+    fallback_only_ints = [tuple([int(n, base=0) for n in i.split(",")]) for i in args.fallback_only_intervals]
+if args.fallback_only_intervals_file:
+    with open(args.fallback_only_intervals_file, "r", encoding="utf-8") as interval_file:
+        for line in interval_file:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            fallback_only_ints.append(tuple([int(n, base=0) for n in stripped.split(",")]))
+
 def norm_floor(val):
     return int(math.floor(val / (1 << 6)))
 
@@ -235,16 +250,20 @@ def code_point_in_intervals(code_point, interval_list):
             return True
     return False
 
+def face_indices_for_codepoint(code_point):
+    if code_point_in_intervals(code_point, fallback_only_ints):
+        return range(1, len(font_stack))
+    if code_point_in_intervals(code_point, primary_only_ints):
+        return range(0, min(1, len(font_stack)))
+    return range(0, len(font_stack))
+
 def load_glyph(code_point):
-    face_limit = 1 if code_point_in_intervals(code_point, primary_only_ints) else len(font_stack)
-    face_index = 0
-    while face_index < face_limit:
+    for face_index in face_indices_for_codepoint(code_point):
         face = font_stack[face_index]
         glyph_index = face.get_char_index(code_point)
         if glyph_index > 0:
             face.load_glyph(glyph_index, load_flags)
             return face
-        face_index += 1
     return None
 
 unmerged_intervals = sorted(subtract_intervals(intervals + add_ints, exclude_ints) + forced_ints)
@@ -403,7 +422,8 @@ kernable_codepoints = set(cp for cp in all_codepoints
 # (same priority logic as load_glyph).
 cp_to_face_idx = {}
 for cp in kernable_codepoints:
-    for face_idx, f in enumerate(font_stack):
+    for face_idx in face_indices_for_codepoint(cp):
+        f = font_stack[face_idx]
         if f.get_char_index(cp) > 0:
             cp_to_face_idx[cp] = face_idx
             break
@@ -730,7 +750,8 @@ ligature_codepoints = set(cp for cp in all_codepoints
 # Map ligature codepoints to the font-stack index that serves them
 lig_cp_to_face_idx = {}
 for cp in ligature_codepoints:
-    for face_idx, f in enumerate(font_stack):
+    for face_idx in face_indices_for_codepoint(cp):
+        f = font_stack[face_idx]
         if f.get_char_index(cp) > 0:
             lig_cp_to_face_idx[cp] = face_idx
             break

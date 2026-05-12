@@ -12,7 +12,7 @@
 
 namespace {
 constexpr uint8_t SECTION_FILE_VERSION =
-    29;  // Korean + upstream + ruby annotation overlay layout
+    30;  // Korean + upstream + ruby annotation overlay layout + Yu Mincho metrics
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) +
                                  sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint32_t) +

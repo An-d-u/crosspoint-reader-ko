@@ -173,7 +173,7 @@ class CrossPointSettings {
   uint8_t fontFamily = BOOKERLY;
   uint8_t fontSize = MEDIUM;
   // Reader line spacing
-  uint8_t lineSpacing = NORMAL;
+  uint8_t lineSpacing = WIDE;
   uint8_t paragraphAlignment = JUSTIFIED;
   // Auto-sleep timeout setting (default 10 minutes)
   uint8_t sleepTimeout = SLEEP_10_MIN;
@@ -182,7 +182,7 @@ class CrossPointSettings {
   uint8_t hyphenationEnabled = 0;
 
   // Reader screen margin settings
-  uint8_t screenMargin = 5;
+  uint8_t screenMargin = 15;
   // OPDS browser settings
   char opdsServerUrl[128] = "";
   char opdsUsername[64] = "";
