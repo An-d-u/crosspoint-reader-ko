@@ -73,7 +73,7 @@ def main() -> int:
             "ruby overlay overlaps are not resolved in TextBlock",
         )
         require(
-            r"for\s*\(\s*const\s+auto&\s+rubyRun\s*:\s*rubyRuns\s*\)\s*\{\s*renderer\.drawText\(rubyFontId,\s*rubyRun\.x,\s*rubyRun\.y,\s*rubyRun\.text,",
+            r"for\s*\(\s*const\s+auto&\s+rubyRun\s*:\s*rubyRuns\s*\)\s*\{\s*drawRubyText\(renderer,\s*rubyFontId,\s*rubyRun\)",
             textblock,
             "ruby overlay runs are not drawn in a dedicated second pass",
         )

@@ -2,11 +2,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <string>
 #include <vector>
 
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Serialization.h>
+#include <Utf8.h>
 
 namespace {
 constexpr int kRubyLineExtraPx = 2;
@@ -19,7 +22,120 @@ struct RubyOverlayRun {
   int x;
   int y;
   int width;
+  bool compactSmallKana;
 };
+
+struct RubyTextCluster {
+  std::string text;
+  uint32_t baseCp;
+};
+
+bool isJapaneseSmallKana(const uint32_t cp) {
+  switch (cp) {
+    case 0x3041:  // ぁ
+    case 0x3043:  // ぃ
+    case 0x3045:  // ぅ
+    case 0x3047:  // ぇ
+    case 0x3049:  // ぉ
+    case 0x3063:  // っ
+    case 0x3083:  // ゃ
+    case 0x3085:  // ゅ
+    case 0x3087:  // ょ
+    case 0x308E:  // ゎ
+    case 0x3095:  // ゕ
+    case 0x3096:  // ゖ
+    case 0x30A1:  // ァ
+    case 0x30A3:  // ィ
+    case 0x30A5:  // ゥ
+    case 0x30A7:  // ェ
+    case 0x30A9:  // ォ
+    case 0x30C3:  // ッ
+    case 0x30E3:  // ャ
+    case 0x30E5:  // ュ
+    case 0x30E7:  // ョ
+    case 0x30EE:  // ヮ
+    case 0x30F5:  // ヵ
+    case 0x30F6:  // ヶ
+      return true;
+    default:
+      return false;
+  }
+}
+
+std::vector<RubyTextCluster> splitRubyTextClusters(const char* text) {
+  std::vector<RubyTextCluster> clusters;
+  if (text == nullptr) {
+    return clusters;
+  }
+
+  const char* p = text;
+  while (*p) {
+    const char* start = p;
+    int charLen = 1;
+    const unsigned char c = static_cast<unsigned char>(*p);
+    if ((c & 0xF8) == 0xF0) {
+      charLen = 4;
+    } else if ((c & 0xF0) == 0xE0) {
+      charLen = 3;
+    } else if ((c & 0xE0) == 0xC0) {
+      charLen = 2;
+    }
+
+    const auto* decodePtr = reinterpret_cast<const unsigned char*>(p);
+    const uint32_t cp = utf8NextCodepoint(&decodePtr);
+    p += charLen;
+
+    if (utf8IsCombiningMark(cp) && !clusters.empty()) {
+      clusters.back().text.append(start, charLen);
+      continue;
+    }
+
+    clusters.push_back({std::string(start, charLen), cp});
+  }
+  return clusters;
+}
+
+bool containsJapaneseSmallKana(const char* text) {
+  const auto clusters = splitRubyTextClusters(text);
+  return std::any_of(clusters.begin(), clusters.end(),
+                     [](const RubyTextCluster& cluster) { return isJapaneseSmallKana(cluster.baseCp); });
+}
+
+int getRubyClusterAdvance(const GfxRenderer& renderer, const int rubyFontId, const RubyTextCluster& cluster) {
+  const int advance = renderer.getTextAdvanceX(rubyFontId, cluster.text.c_str(), EpdFontFamily::REGULAR);
+  if (!isJapaneseSmallKana(cluster.baseCp)) {
+    return advance;
+  }
+
+  const int visualWidth = renderer.getTextWidth(rubyFontId, cluster.text.c_str(), EpdFontFamily::REGULAR);
+  return std::max(1, std::min(advance, visualWidth));
+}
+
+int measureRubyTextWidth(const GfxRenderer& renderer, const int rubyFontId, const char* text,
+                         const bool compactSmallKana) {
+  if (!compactSmallKana) {
+    return renderer.getTextAdvanceX(rubyFontId, text, EpdFontFamily::REGULAR);
+  }
+
+  int width = 0;
+  for (const auto& cluster : splitRubyTextClusters(text)) {
+    width += getRubyClusterAdvance(renderer, rubyFontId, cluster);
+  }
+  return width;
+}
+
+void drawRubyText(const GfxRenderer& renderer, const int rubyFontId, const RubyOverlayRun& rubyRun) {
+  if (!rubyRun.compactSmallKana) {
+    renderer.drawText(rubyFontId, rubyRun.x, rubyRun.y, rubyRun.text, true, EpdFontFamily::REGULAR);
+    return;
+  }
+
+  int cursorX = rubyRun.x;
+  for (const auto& cluster : splitRubyTextClusters(rubyRun.text)) {
+    renderer.drawText(rubyFontId, cursorX, rubyRun.y, cluster.text.c_str(), true, EpdFontFamily::REGULAR);
+    cursorX += getRubyClusterAdvance(renderer, rubyFontId, cluster);
+  }
+}
 
 void placeRubyCluster(std::vector<RubyOverlayRun>& rubyRuns, const size_t start, const size_t endExclusive) {
   if (start >= endExclusive) {
@@ -67,9 +183,10 @@ std::vector<RubyOverlayRun> buildRubyOverlayRuns(const GfxRenderer& renderer, co
     const int baseX = wordXpos[firstIndex] + x;
     const int baseRight = wordXpos[lastIndex] + x + tokenWidths[lastIndex];
     const int baseWidth = baseRight - baseX;
-    const int rubyWidth = renderer.getTextAdvanceX(rubyFontId, ruby.text.c_str(), EpdFontFamily::REGULAR);
+    const bool compactSmallKana = containsJapaneseSmallKana(ruby.text.c_str());
+    const int rubyWidth = measureRubyTextWidth(renderer, rubyFontId, ruby.text.c_str(), compactSmallKana);
     const int preferredX = baseX + (baseWidth - rubyWidth) / 2;
-    rubyRuns.push_back({ruby.text.c_str(), preferredX, preferredX, y - kRubyTextLiftPx, rubyWidth});
+    rubyRuns.push_back({ruby.text.c_str(), preferredX, preferredX, y - kRubyTextLiftPx, rubyWidth, compactSmallKana});
   }
 
   return rubyRuns;
@@ -228,7 +345,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
   resolveRubyRunOverlaps(rubyRuns);
   clampRubyRunsToScreen(rubyRuns, renderer.getScreenWidth());
   for (const auto& rubyRun : rubyRuns) {
-    renderer.drawText(rubyFontId, rubyRun.x, rubyRun.y, rubyRun.text, true, EpdFontFamily::REGULAR);
+    drawRubyText(renderer, rubyFontId, rubyRun);
   }
 }
 
