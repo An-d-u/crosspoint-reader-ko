@@ -15,7 +15,7 @@
 #include "EpubReaderChapterSelectionActivity.h"
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_KOREADER_SYNC
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #endif
@@ -433,7 +433,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::SYNC: {
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_KOREADER_SYNC
       if (KOREADER_STORE.hasCredentials()) {
         const int currentPage = section ? section->currentPage : 0;
         const int totalPages = section ? section->pageCount : 0;

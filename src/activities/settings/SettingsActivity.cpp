@@ -4,23 +4,23 @@
 #include <Logging.h>
 
 #include "ButtonRemapActivity.h"
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_OPDS
 #include "CalibreSettingsActivity.h"
 #endif
 #include "ClearCacheActivity.h"
 #include "CrossPointSettings.h"
 #include "FontSelectionActivity.h"
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_KOREADER_SYNC
 #include "KOReaderSettingsActivity.h"
 #endif
 #include "LanguageSelectActivity.h"
 #include "MappedInputManager.h"
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_OTA
 #include "OtaUpdateActivity.h"
 #endif
 #include "SettingsList.h"
 #include "StatusBarSettingsActivity.h"
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_WIFI_SETTINGS
 #include "activities/network/WifiSelectionActivity.h"
 #endif
 #include "components/UITheme.h"
@@ -57,13 +57,17 @@ void SettingsActivity::onEnter() {
                         SettingInfo::Action(StrId::STR_FONT_FAMILY, SettingAction::FontSelection));
   controlsSettings.insert(controlsSettings.begin(),
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
-  #if CROSSPOINT_ENABLE_NETWORK
+  #if CROSSPOINT_ENABLE_WIFI_SETTINGS
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
+  #endif
+  #if CROSSPOINT_ENABLE_KOREADER_SYNC
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
+  #endif
+  #if CROSSPOINT_ENABLE_OPDS
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_BROWSER, SettingAction::OPDSBrowser));
   #endif
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
-  #if CROSSPOINT_ENABLE_NETWORK
+  #if CROSSPOINT_ENABLE_OTA
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
   #endif
   systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
@@ -190,17 +194,17 @@ void SettingsActivity::toggleCurrentSetting() {
         startActivityForResult(std::make_unique<StatusBarSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::KOReaderSync:
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_KOREADER_SYNC
         startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput), resultHandler);
 #endif
         break;
       case SettingAction::OPDSBrowser:
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_OPDS
         startActivityForResult(std::make_unique<CalibreSettingsActivity>(renderer, mappedInput), resultHandler);
 #endif
         break;
       case SettingAction::Network:
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_WIFI_SETTINGS
         startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false), resultHandler);
 #endif
         break;
@@ -208,7 +212,7 @@ void SettingsActivity::toggleCurrentSetting() {
         startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::CheckForUpdates:
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_OTA
         startActivityForResult(std::make_unique<OtaUpdateActivity>(renderer, mappedInput), resultHandler);
 #endif
         break;

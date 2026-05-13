@@ -18,7 +18,7 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_KOREADER_SYNC
 #include "KOReaderCredentialStore.h"
 #endif
 #include "MappedInputManager.h"
@@ -284,7 +284,7 @@ void setup() {
 
   SETTINGS.loadFromFile();
   I18N.loadSettings();
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_KOREADER_SYNC
   KOREADER_STORE.loadFromFile();
 #endif
   UITheme::getInstance().reload();
@@ -298,9 +298,10 @@ void setup() {
                                    SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
       break;
     case HalGPIO::WakeupReason::AfterUSBPower:
-      // If USB power caused a cold boot, go back to sleep
+      // 전체 플래시 직후에는 USB 전원 상태로 재시작될 수 있다.
+      // 이때 바로 절전으로 들어가면 사용자는 부팅 실패처럼 보게 되므로 정상 부팅을 계속한다.
       LOG_DBG("MAIN", "Wakeup reason: After USB Power");
-      powerManager.startDeepSleep(gpio);
+      break;
       break;
     case HalGPIO::WakeupReason::AfterFlash:
       // After flashing, just proceed to boot

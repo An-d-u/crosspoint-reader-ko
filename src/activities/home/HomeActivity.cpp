@@ -24,8 +24,10 @@ int HomeActivity::getMenuItemCount() const {
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_WEB_TRANSFER
   count += 1;  // File transfer
+#endif
+#if CROSSPOINT_ENABLE_OPDS
   if (hasOpdsUrl) {
     count++;
   }
@@ -119,7 +121,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 void HomeActivity::onEnter() {
   Activity::onEnter();
 
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_OPDS
   // Check if OPDS browser URL is configured
   hasOpdsUrl = strlen(SETTINGS.opdsServerUrl) > 0;
 #else
@@ -203,8 +205,10 @@ void HomeActivity::loop() {
     int menuSelectedIndex = selectorIndex - static_cast<int>(recentBooks.size());
     const int fileBrowserIdx = idx++;
     const int recentsIdx = idx++;
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_OPDS
     const int opdsLibraryIdx = hasOpdsUrl ? idx++ : -1;
+#endif
+#if CROSSPOINT_ENABLE_WEB_TRANSFER
     const int fileTransferIdx = idx++;
 #endif
     const int settingsIdx = idx;
@@ -215,9 +219,11 @@ void HomeActivity::loop() {
       onFileBrowserOpen();
     } else if (menuSelectedIndex == recentsIdx) {
       onRecentsOpen();
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_OPDS
     } else if (menuSelectedIndex == opdsLibraryIdx) {
       onOpdsBrowserOpen();
+#endif
+#if CROSSPOINT_ENABLE_WEB_TRANSFER
     } else if (menuSelectedIndex == fileTransferIdx) {
       onFileTransferOpen();
 #endif
@@ -245,9 +251,11 @@ void HomeActivity::render(RenderLock&&) {
   std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_SETTINGS_TITLE)};
   std::vector<UIIcon> menuIcons = {Folder, Recent, Settings};
 
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_WEB_TRANSFER
   menuItems.insert(menuItems.begin() + 2, tr(STR_FILE_TRANSFER));
   menuIcons.insert(menuIcons.begin() + 2, Transfer);
+#endif
+#if CROSSPOINT_ENABLE_OPDS
   if (hasOpdsUrl) {
     // Insert OPDS Browser after File Browser
     menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));

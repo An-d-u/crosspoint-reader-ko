@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_KOREADER_SYNC
 #include "KOReaderCredentialStore.h"
 #endif
 #include "activities/settings/SettingsActivity.h"
@@ -82,7 +82,7 @@ inline const std::vector<SettingInfo>& getSettingsList() {
       SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
                           StrId::STR_CAT_SYSTEM),
 
-      #if CROSSPOINT_ENABLE_NETWORK
+      #if CROSSPOINT_ENABLE_KOREADER_SYNC
       // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
       SettingInfo::DynamicString(
           StrId::STR_KOREADER_USERNAME, [] { return KOREADER_STORE.getUsername(); },
@@ -113,7 +113,9 @@ inline const std::vector<SettingInfo>& getSettingsList() {
             KOREADER_STORE.saveToFile();
           },
           "koMatchMethod", StrId::STR_KOREADER_SYNC),
+      #endif
 
+      #if CROSSPOINT_ENABLE_OPDS
       // --- OPDS Browser (web-only, uses CrossPointSettings char arrays) ---
       SettingInfo::String(StrId::STR_OPDS_SERVER_URL, SETTINGS.opdsServerUrl, sizeof(SETTINGS.opdsServerUrl),
                           "opdsServerUrl", StrId::STR_OPDS_BROWSER),

@@ -4,14 +4,11 @@
 #include <memory>
 #include <string>
 
-#include "NetworkModeSelectionActivity.h"
 #include "activities/Activity.h"
 #include "network/CrossPointWebServer.h"
 
 // Web server activity states
 enum class WebServerActivityState {
-  MODE_SELECTION,  // Choosing between Join Network and Create Hotspot
-  WIFI_SELECTION,  // WiFi selection subactivity is active (for Join Network mode)
   AP_STARTING,     // Starting Access Point mode
   SERVER_RUNNING,  // Web server is running and handling requests
   SHUTTING_DOWN    // Shutting down server and WiFi
@@ -28,11 +25,7 @@ enum class WebServerActivityState {
  * - Cleans up the server and shuts down WiFi on exit
  */
 class CrossPointWebServerActivity final : public Activity {
-  WebServerActivityState state = WebServerActivityState::MODE_SELECTION;
-
-  // Network mode
-  NetworkMode networkMode = NetworkMode::JOIN_NETWORK;
-  bool isApMode = false;
+  WebServerActivityState state = WebServerActivityState::AP_STARTING;
 
   // Web server - owned by this activity
   std::unique_ptr<CrossPointWebServer> webServer;
@@ -46,8 +39,6 @@ class CrossPointWebServerActivity final : public Activity {
 
   void renderServerRunning() const;
 
-  void onNetworkModeSelected(NetworkMode mode);
-  void onWifiSelectionComplete(bool connected);
   void startAccessPoint();
   void startWebServer();
   void stopWebServer();

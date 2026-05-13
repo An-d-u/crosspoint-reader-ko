@@ -4,14 +4,14 @@
 
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_OPDS
 #include "browser/OpdsBookBrowserActivity.h"
 #endif
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_WEB_TRANSFER
 #include "network/CrossPointWebServerActivity.h"
 #endif
 #include "reader/ReaderActivity.h"
@@ -169,7 +169,7 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
 }
 
 void ActivityManager::goToFileTransfer() {
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_WEB_TRANSFER
   replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
 #else
   replaceActivity(std::make_unique<FullScreenMessageActivity>(renderer, mappedInput, "Network disabled"));
@@ -187,7 +187,7 @@ void ActivityManager::goToRecentBooks() {
 }
 
 void ActivityManager::goToBrowser() {
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_OPDS
   replaceActivity(std::make_unique<OpdsBookBrowserActivity>(renderer, mappedInput));
 #else
   replaceActivity(std::make_unique<FullScreenMessageActivity>(renderer, mappedInput, "Network disabled"));

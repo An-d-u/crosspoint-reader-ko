@@ -10,8 +10,10 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_KOREADER_SYNC
 #include "KOReaderCredentialStore.h"
+#endif
+#if CROSSPOINT_ENABLE_WIFI_SETTINGS
 #include "WifiCredentialStore.h"
 #endif
 #include "RecentBooksStore.h"
@@ -217,7 +219,7 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
 
 // ---- KOReaderCredentialStore ----
 
-#if CROSSPOINT_ENABLE_NETWORK
+#if CROSSPOINT_ENABLE_KOREADER_SYNC
 bool JsonSettingsIO::saveKOReader(const KOReaderCredentialStore& store, const char* path) {
   JsonDocument doc;
   doc["username"] = store.getUsername();
@@ -253,9 +255,11 @@ bool JsonSettingsIO::loadKOReader(KOReaderCredentialStore& store, const char* js
   LOG_DBG("KRS", "Loaded KOReader credentials for user: %s", store.username.c_str());
   return true;
 }
+#endif
 
 // ---- WifiCredentialStore ----
 
+#if CROSSPOINT_ENABLE_WIFI_SETTINGS
 bool JsonSettingsIO::saveWifi(const WifiCredentialStore& store, const char* path) {
   JsonDocument doc;
   doc["lastConnectedSsid"] = store.getLastConnectedSsid();
