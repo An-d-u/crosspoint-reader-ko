@@ -1,4 +1,4 @@
-_language_name: "한국어"
+﻿_language_name: "한국어"
 _language_code: "KOREAN"
 _order: "11"
 
@@ -316,6 +316,7 @@ STR_SECTION_PREFIX: "섹션 "
 STR_UPLOAD: "업로드"
 STR_BOOK_S_STYLE: "도서 스타일"
 STR_EMBEDDED_STYLE: "내장 스타일"
+STR_RESPECT_EPUB_VERTICAL_WRITING: "EPUB 세로쓰기 반영"
 STR_OPDS_SERVER_URL: "OPDS 서버 URL"
 STR_SCREENSHOT_BUTTON: "스크린샷 촬영"
 STR_PARAGRAPH_INDENT: "단락 들여쓰기"

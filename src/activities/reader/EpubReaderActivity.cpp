@@ -1,4 +1,4 @@
-#include "EpubReaderActivity.h"
+﻿#include "EpubReaderActivity.h"
 
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
@@ -612,9 +612,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     section = std::unique_ptr<Section>(new Section(epub, currentSpineIndex, renderer));
 
     if (!section->loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
-                                  SETTINGS.extraParagraphSpacing, SETTINGS.paragraphIndent, SETTINGS.paragraphAlignment,
-                                  SETTINGS.characterWrap, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
-                                  SETTINGS.embeddedStyle, SETTINGS.imageRendering)) {
+                                   SETTINGS.extraParagraphSpacing, SETTINGS.paragraphIndent, SETTINGS.paragraphAlignment,
+                                   SETTINGS.characterWrap, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
+                                   SETTINGS.embeddedStyle, SETTINGS.imageRendering,
+                                   SETTINGS.respectEpubVerticalWriting)) {
       LOG_DBG("ERS", "Cache not found, building...");
 
       const auto popupFn = [this]() { GUI.drawPopup(renderer, tr(STR_INDEXING)); };
@@ -622,7 +623,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       if (!section->createSectionFile(
               SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
               SETTINGS.paragraphIndent, SETTINGS.paragraphAlignment, SETTINGS.characterWrap, viewportWidth,
-              viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering, popupFn)) {
+              viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering,
+              SETTINGS.respectEpubVerticalWriting, popupFn)) {
         LOG_ERR("ERS", "Failed to persist page data to SD");
         clearPrefetchedPage();
         section.reset();
@@ -744,7 +746,8 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   if (nextSection.loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                   SETTINGS.extraParagraphSpacing, SETTINGS.paragraphIndent, SETTINGS.paragraphAlignment,
                                   SETTINGS.characterWrap, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
-                                  SETTINGS.embeddedStyle, SETTINGS.imageRendering)) {
+                                  SETTINGS.embeddedStyle, SETTINGS.imageRendering,
+                                  SETTINGS.respectEpubVerticalWriting)) {
     return;
   }
 
@@ -752,7 +755,8 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   if (!nextSection.createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                      SETTINGS.extraParagraphSpacing, SETTINGS.paragraphIndent,
                                      SETTINGS.paragraphAlignment, SETTINGS.characterWrap, viewportWidth, viewportHeight,
-                                     SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering)) {
+                                     SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering,
+                                     SETTINGS.respectEpubVerticalWriting)) {
     LOG_ERR("ERS", "Failed silent indexing for chapter: %d", nextSpineIndex);
   }
 }
@@ -783,7 +787,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Font prewarm: scan pass accumulates text, then prewarm, then real render
   const uint32_t heapBefore = esp_get_free_heap_size();
   auto scope = fcm->createPrewarmScope();
-  page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop);  // scan pass
+  const bool verticalWritingMode = section && section->isVerticalWritingMode();
+  page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop,
+               verticalWritingMode);  // scan pass
   scope.endScanAndPrewarm();
   const uint32_t heapAfter = esp_get_free_heap_size();
   fcm->logStats("prewarm");
@@ -795,7 +801,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Force special handling for pages with images when anti-aliasing is on
   bool imagePageWithAA = page->hasImages() && SETTINGS.textAntiAliasing;
 
-  page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop);
+  page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop,
+               verticalWritingMode);
   renderStatusBar();
   fcm->logStats("bw_render");
   const auto tBwRender = millis();
@@ -813,7 +820,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
       // Re-render page content to restore images into the blanked area
       // Status bar is not re-rendered here to avoid reading stale dynamic values (e.g. battery %)
-      page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop);
+      page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop,
+                   verticalWritingMode);
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     } else {
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -837,14 +845,16 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   if (bwStored && SETTINGS.textAntiAliasing) {
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-    page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop);
+    page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop,
+                 verticalWritingMode);
     renderer.copyGrayscaleLsbBuffers();
     const auto tGrayLsb = millis();
 
     // Render and copy to MSB buffer
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-    page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop);
+    page->render(renderer, SETTINGS.getReaderFontId(), UI_FONT_ID, orientedMarginLeft, orientedMarginTop,
+                 verticalWritingMode);
     renderer.copyGrayscaleMsbBuffers();
     const auto tGrayMsb = millis();
 

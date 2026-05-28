@@ -1,4 +1,4 @@
-#include "ChapterHtmlSlimParser.h"
+﻿#include "ChapterHtmlSlimParser.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -1346,14 +1346,15 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 }
 
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
-  const int lineHeight = line->getRenderedLineHeight(renderer, fontId, rubyFontId, lineCompression);
+  const int lineHeight = line->getRenderedLineHeight(renderer, fontId, rubyFontId, lineCompression, verticalWritingMode);
 
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;
   }
 
-  if (currentPageNextY + lineHeight > viewportHeight) {
+  const uint16_t pageMeasure = verticalWritingMode ? viewportWidth : viewportHeight;
+  if (currentPageNextY + lineHeight > pageMeasure) {
     completePageFn(std::move(currentPage));
     completedPageCount++;
     currentPage.reset(new Page());
@@ -1369,9 +1370,11 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   }
   pendingFootnotes.erase(pendingFootnotes.begin(), footnoteIt);
 
-  // Apply horizontal left inset (margin + padding) as x position offset
-  const int16_t xOffset = line->getBlockStyle().leftInset();
-  currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));
+  const int16_t xOffset =
+      verticalWritingMode ? static_cast<int16_t>(viewportWidth - currentPageNextY - lineHeight)
+                          : line->getBlockStyle().leftInset();
+  const int16_t yOffset = verticalWritingMode ? line->getBlockStyle().leftInset() : currentPageNextY;
+  currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, yOffset));
   currentPageNextY += lineHeight;
 }
 
@@ -1399,8 +1402,9 @@ void ChapterHtmlSlimParser::makePages() {
 
   // Calculate effective width accounting for horizontal margins/padding
   const int horizontalInset = blockStyle.totalHorizontalInset();
+  const uint16_t layoutWidth = verticalWritingMode ? viewportHeight : viewportWidth;
   const uint16_t effectiveWidth =
-      (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
+      (horizontalInset < layoutWidth) ? static_cast<uint16_t>(layoutWidth - horizontalInset) : layoutWidth;
 
   currentTextBlock->layoutAndExtractLines(
       renderer, fontId, rubyFontId, effectiveWidth,

@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import re
 import sys
 
@@ -78,7 +78,7 @@ def main() -> int:
             "ruby overlay runs are not drawn in a dedicated second pass",
         )
         require(
-            r"SECTION_FILE_VERSION\s*=\s*30\s*;",
+            r"SECTION_FILE_VERSION\s*=\s*(?:3[0-9]|[4-9][0-9])\s*;",
             section,
             "section cache version not bumped for ruby overlay layout",
         )

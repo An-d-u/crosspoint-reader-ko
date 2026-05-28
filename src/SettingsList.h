@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <I18n.h>
 
@@ -55,6 +55,8 @@ inline const std::vector<SettingInfo>& getSettingsList() {
       SettingInfo::Enum(StrId::STR_ORIENTATION, &CrossPointSettings::orientation,
                         {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_INVERTED, StrId::STR_LANDSCAPE_CCW},
                         "orientation", StrId::STR_CAT_READER),
+      SettingInfo::Toggle(StrId::STR_RESPECT_EPUB_VERTICAL_WRITING, &CrossPointSettings::respectEpubVerticalWriting,
+                          "respectEpubVerticalWriting", StrId::STR_CAT_READER),
       SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing, "extraParagraphSpacing",
                           StrId::STR_CAT_READER),
       SettingInfo::Toggle(StrId::STR_PARAGRAPH_INDENT, &CrossPointSettings::paragraphIndent, "paragraphIndent",

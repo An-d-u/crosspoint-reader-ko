@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <HalStorage.h>
 
 #include <cstdint>
@@ -205,6 +205,8 @@ class CrossPointSettings {
   uint8_t showHiddenFiles = 0;
   // Image rendering mode in EPUB reader
   uint8_t imageRendering = IMAGES_DISPLAY;
+  // EPUB/CSS의 세로쓰기 선언을 본문 렌더링에 반영할지 여부 (0 = 끔, 1 = 켬)
+  uint8_t respectEpubVerticalWriting = 0;
 
   ~CrossPointSettings() = default;
 

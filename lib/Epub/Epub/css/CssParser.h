@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <HalStorage.h>
 
@@ -31,7 +31,7 @@
 class CssParser {
  public:
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  static constexpr uint8_t CSS_CACHE_VERSION = 4;
+  static constexpr uint8_t CSS_CACHE_VERSION = 5;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -74,6 +74,7 @@ class CssParser {
    * Get count of loaded rule sets
    */
   [[nodiscard]] size_t ruleCount() const { return rulesBySelector_.size(); }
+  [[nodiscard]] bool hasVerticalWritingMode() const;
 
   /**
    * Clear all loaded rules

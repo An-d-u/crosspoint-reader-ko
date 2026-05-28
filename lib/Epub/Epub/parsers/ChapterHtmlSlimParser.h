@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <expat.h>
 
@@ -54,6 +54,7 @@ class ChapterHtmlSlimParser {
   const CssParser* cssParser;
   bool embeddedStyle;
   uint8_t imageRendering;
+  bool verticalWritingMode;
   std::string contentBase;
   std::string imageBasePath;
   int imageCounter = 0;
@@ -123,9 +124,10 @@ class ChapterHtmlSlimParser {
                                  const uint16_t viewportHeight,
                                  const bool hyphenationEnabled,
                                  const std::function<void(std::unique_ptr<Page>)>& completePageFn,
-                                 const bool embeddedStyle, const std::string& contentBase,
-                                 const std::string& imageBasePath, const uint8_t imageRendering = 0,
-                                 const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr)
+                                  const bool embeddedStyle, const std::string& contentBase,
+                                  const std::string& imageBasePath, const uint8_t imageRendering = 0,
+                                  const bool verticalWritingMode = false,
+                                  const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr)
 
       : epub(epub),
         filepath(filepath),
@@ -145,6 +147,7 @@ class ChapterHtmlSlimParser {
         cssParser(cssParser),
         embeddedStyle(embeddedStyle),
         imageRendering(imageRendering),
+        verticalWritingMode(verticalWritingMode),
         contentBase(contentBase),
         imageBasePath(imageBasePath) {}
 

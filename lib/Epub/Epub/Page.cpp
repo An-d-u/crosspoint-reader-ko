@@ -1,11 +1,11 @@
-#include "Page.h"
+﻿#include "Page.h"
 
 #include <Logging.h>
 #include <Serialization.h>
 
 void PageLine::render(GfxRenderer& renderer, const int fontId, const int rubyFontId, const int xOffset,
-                      const int yOffset) {
-  block->render(renderer, fontId, rubyFontId, xPos + xOffset, yPos + yOffset);
+                      const int yOffset, const bool verticalWritingMode) {
+  block->render(renderer, fontId, rubyFontId, xPos + xOffset, yPos + yOffset, verticalWritingMode);
 }
 
 bool PageLine::serialize(FsFile& file) {
@@ -27,7 +27,8 @@ std::unique_ptr<PageLine> PageLine::deserialize(FsFile& file) {
 }
 
 void PageImage::render(GfxRenderer& renderer, const int fontId, const int rubyFontId, const int xOffset,
-                       const int yOffset) {
+                       const int yOffset, const bool verticalWritingMode) {
+  (void)verticalWritingMode;
   // Images don't use fontId/rubyFontId or text rendering
   imageBlock->render(renderer, xPos + xOffset, yPos + yOffset);
 }
@@ -51,9 +52,9 @@ std::unique_ptr<PageImage> PageImage::deserialize(FsFile& file) {
 }
 
 void Page::render(GfxRenderer& renderer, const int fontId, const int rubyFontId, const int xOffset,
-                  const int yOffset) const {
+                  const int yOffset, const bool verticalWritingMode) const {
   for (auto& element : elements) {
-    element->render(renderer, fontId, rubyFontId, xOffset, yOffset);
+    element->render(renderer, fontId, rubyFontId, xOffset, yOffset, verticalWritingMode);
   }
 }
 

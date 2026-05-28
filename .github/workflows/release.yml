@@ -1,4 +1,4 @@
-name: Compile Release
+﻿name: Compile Release
 on:
   push:
     tags:
@@ -44,11 +44,12 @@ jobs:
 
     - name: Merge firmware binaries
       run: |
-        esptool.py --chip esp32c3 merge_bin \
+        esptool.py --chip esp32c3 merge-bin \
           -o .pio/build/gh_release/CrossPoint-${{ github.ref_name }}.bin \
-          --flash_mode dio \
-          --flash_freq 80m \
-          --flash_size 16MB \
+          --flash-mode dio \
+          --flash-freq 80m \
+          --flash-size 16MB \
+          --pad-to-size 16MB \
           0x0 .pio/build/gh_release/bootloader.bin \
           0x8000 .pio/build/gh_release/partitions.bin \
           0x10000 .pio/build/gh_release/firmware.bin

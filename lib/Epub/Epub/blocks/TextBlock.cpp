@@ -1,8 +1,9 @@
-#include "TextBlock.h"
+﻿#include "TextBlock.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@ namespace {
 constexpr int kRubyLineExtraPx = 2;
 constexpr int kRubyBaseYOffsetPx = 2;
 constexpr int kRubyTextLiftPx = 19;
+constexpr int kVerticalRubyGapPx = 2;
 
 struct RubyOverlayRun {
   const char* text;
@@ -136,6 +138,76 @@ void clampRubyRunsToScreen(std::vector<RubyOverlayRun>& rubyRuns, const int scre
     rubyRun.x = std::max(0, std::min(rubyRun.x, screenWidth - rubyRun.width));
   }
 }
+
+int utf8CharLength(const char* p) {
+  const uint8_t c = static_cast<uint8_t>(*p);
+  if ((c & 0xF8) == 0xF0) return 4;
+  if ((c & 0xF0) == 0xE0) return 3;
+  if ((c & 0xE0) == 0xC0) return 2;
+  return 1;
+}
+
+int verticalGlyphAdvance(const GfxRenderer& renderer, const int fontId, const char* glyph,
+                         const EpdFontFamily::Style style) {
+  if (glyph[0] == ' ' && glyph[1] == '\0') {
+    return renderer.getSpaceWidth(fontId, style);
+  }
+  return std::max(1, renderer.getTextAdvanceX(fontId, glyph, style));
+}
+
+int measureVerticalRun(const GfxRenderer& renderer, const int fontId, const char* text,
+                       const EpdFontFamily::Style style) {
+  int advance = 0;
+  while (text && *text) {
+    char glyph[5] = {};
+    const int len = utf8CharLength(text);
+    memcpy(glyph, text, std::min(len, 4));
+    advance += verticalGlyphAdvance(renderer, fontId, glyph, style);
+    text += len;
+  }
+  return advance;
+}
+
+void drawVerticalRun(const GfxRenderer& renderer, const int fontId, const int x, int y, const char* text,
+                     const EpdFontFamily::Style style) {
+  while (text && *text) {
+    char glyph[5] = {};
+    const int len = utf8CharLength(text);
+    memcpy(glyph, text, std::min(len, 4));
+    renderer.drawText(fontId, x, y, glyph, true, style);
+    y += verticalGlyphAdvance(renderer, fontId, glyph, style);
+    text += len;
+  }
+}
+
+void renderVerticalWriting(const TextBlock& block, const GfxRenderer& renderer, const int fontId, const int rubyFontId,
+                           const int x, const int y, const std::vector<std::string>& words,
+                           const std::vector<RubyAnnotation>& rubyAnnotations, const std::vector<int16_t>& wordXpos,
+                           const std::vector<uint16_t>& tokenWidths,
+                           const std::vector<EpdFontFamily::Style>& wordStyles) {
+  const int rubyX = x + renderer.getLineHeight(fontId) + kVerticalRubyGapPx;
+  for (size_t i = 0; i < words.size(); i++) {
+    drawVerticalRun(renderer, fontId, x, y + wordXpos[i], words[i].c_str(), wordStyles[i]);
+  }
+
+  if (!block.hasRuby()) {
+    return;
+  }
+
+  for (const auto& ruby : rubyAnnotations) {
+    if (ruby.text.empty() || ruby.wordCount == 0 || ruby.startWordIndex >= wordXpos.size()) {
+      continue;
+    }
+    const size_t firstIndex = ruby.startWordIndex;
+    const size_t lastIndex = std::min(wordXpos.size() - 1, firstIndex + ruby.wordCount - 1);
+    const int baseTop = y + wordXpos[firstIndex];
+    const int baseBottom = y + wordXpos[lastIndex] + tokenWidths[lastIndex];
+    const int baseHeight = baseBottom - baseTop;
+    const int rubyHeight = measureVerticalRun(renderer, rubyFontId, ruby.text.c_str(), EpdFontFamily::REGULAR);
+    const int rubyY = baseTop + (baseHeight - rubyHeight) / 2;
+    drawVerticalRun(renderer, rubyFontId, rubyX, rubyY, ruby.text.c_str(), EpdFontFamily::REGULAR);
+  }
+}
 }
 
 bool TextBlock::hasRuby() const {
@@ -148,22 +220,31 @@ bool TextBlock::hasRuby() const {
 }
 
 int TextBlock::getRenderedLineHeight(const GfxRenderer& renderer, const int fontId, const int rubyFontId,
-                                     const float lineCompression) const {
+                                     const float lineCompression, const bool verticalWritingMode) const {
   const int baseLineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
   if (!hasRuby()) {
     return baseLineHeight;
+  }
+  if (verticalWritingMode) {
+    return baseLineHeight + kVerticalRubyGapPx + renderer.getLineHeight(rubyFontId);
   }
   return baseLineHeight + kRubyLineExtraPx;
 }
 
 void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int rubyFontId, const int x,
-                       const int y) const {
+                       const int y, const bool verticalWritingMode) const {
   // Validate iterator bounds before rendering
   if (words.size() != wordXpos.size() || words.size() != wordStyles.size() ||
       words.size() != tokenWidths.size()) {
     LOG_ERR("TXB", "Render skipped: size mismatch (words=%u, xpos=%u, styles=%u, widths=%u)\n",
             (uint32_t)words.size(), (uint32_t)wordXpos.size(), (uint32_t)wordStyles.size(),
             (uint32_t)tokenWidths.size());
+    return;
+  }
+
+  if (verticalWritingMode) {
+    renderVerticalWriting(*this, renderer, fontId, rubyFontId, x, y, words, rubyAnnotations, wordXpos, tokenWidths,
+                          wordStyles);
     return;
   }
 

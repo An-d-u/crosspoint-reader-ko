@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import re
 import sys
 
@@ -56,7 +56,8 @@ def main() -> int:
                 text_block,
                 "ruby preferred overlay position missing")
         require(r"kRubyTextLiftPx\s*=\s*19\s*;", text_block, "ruby lift was not raised for Yu Mincho metrics")
-        require(r"SECTION_FILE_VERSION\s*=\s*30\s*;", section, "section cache version not bumped for ruby layout change")
+        require(r"SECTION_FILE_VERSION\s*=\s*(?:3[0-9]|[4-9][0-9])\s*;", section,
+                "section cache version not bumped for ruby layout change")
     except AssertionError as exc:
         print(exc)
         return 1

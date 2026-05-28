@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import re
 import sys
 
@@ -38,7 +38,8 @@ def main() -> int:
         require(r"clampRubyRunsToScreen\s*\(\s*rubyRuns\s*,\s*renderer\.getScreenWidth\(\)\s*\)",
                 textblock, "TextBlock render does not keep ruby overlay inside the screen")
         require(r"for\s*\(\s*const\s+auto&\s+rubyRun\s*:\s*rubyRuns\s*\)", textblock, "TextBlock render does not draw ruby overlay runs in a second pass")
-        require(r"SECTION_FILE_VERSION\s*=\s*30\s*;", section, "section cache version not bumped for ruby overlay layout")
+        require(r"SECTION_FILE_VERSION\s*=\s*(?:3[0-9]|[4-9][0-9])\s*;", section,
+                "section cache version not bumped for ruby overlay layout")
     except AssertionError as exc:
         print(exc)
         return 1

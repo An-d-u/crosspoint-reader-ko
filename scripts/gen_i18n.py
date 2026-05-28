@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Generate I18n C++ files from per-language YAML translations.
 
@@ -72,7 +72,7 @@ def parse_yaml_file(filepath: str) -> Dict[str, str]:
     Aborts on formatting errors.
     """
     result = {}
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, "r", encoding="utf-8-sig") as f:
         for line_num, raw_line in enumerate(f, start=1):
             line = raw_line.rstrip("\n\r")
 
