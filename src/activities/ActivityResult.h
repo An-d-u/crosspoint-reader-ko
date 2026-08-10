@@ -35,6 +35,12 @@ struct PageResult {
   uint32_t page = 0;
 };
 
+struct BookmarkResult {
+  int spineIndex = -1;
+  uint32_t page = 0;
+  uint32_t pageCount = 0;
+};
+
 struct SyncResult {
   int spineIndex = 0;
   int page = 0;
@@ -51,7 +57,7 @@ struct FootnoteResult {
 };
 
 using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
-                                   PageResult, SyncResult, NetworkModeResult, FootnoteResult>;
+                                   PageResult, BookmarkResult, SyncResult, NetworkModeResult, FootnoteResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

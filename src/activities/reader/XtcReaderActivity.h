@@ -9,6 +9,7 @@
 
 #include <Xtc.h>
 
+#include "BookmarkStore.h"
 #include "activities/Activity.h"
 
 class XtcReaderActivity final : public Activity {
@@ -20,6 +21,10 @@ class XtcReaderActivity final : public Activity {
   void renderPage();
   void saveProgress() const;
   void loadProgress();
+  Bookmark getCurrentBookmark();
+  void openReaderMenu();
+  void openChapterSelection();
+  void openBookmarks();
 
  public:
   explicit XtcReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Xtc> xtc)

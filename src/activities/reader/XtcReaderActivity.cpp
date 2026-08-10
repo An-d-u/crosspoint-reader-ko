@@ -12,8 +12,12 @@
 #include <HalStorage.h>
 #include <I18n.h>
 
+#include <algorithm>
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "BookmarkListActivity.h"
+#include "DocumentReaderMenuActivity.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "XtcReaderChapterSelectionActivity.h"
@@ -54,18 +58,90 @@ void XtcReaderActivity::onExit() {
   xtc.reset();
 }
 
-void XtcReaderActivity::loop() {
-  // Enter chapter selection activity
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (xtc && xtc->hasChapters() && !xtc->getChapters().empty()) {
-      startActivityForResult(
-          std::make_unique<XtcReaderChapterSelectionActivity>(renderer, mappedInput, xtc, currentPage),
-          [this](const ActivityResult& result) {
-            if (!result.isCancelled) {
-              currentPage = std::get<PageResult>(result.data).page;
-            }
-          });
+Bookmark XtcReaderActivity::getCurrentBookmark() {
+  Bookmark bookmark;
+  if (!xtc || xtc->getPageCount() == 0 || currentPage >= xtc->getPageCount()) {
+    return bookmark;
+  }
+
+  bookmark.page = currentPage;
+  bookmark.pageCount = xtc->getPageCount();
+  bookmark.bookProgress = xtc->calculateProgress(currentPage);
+
+  if (xtc->hasChapters()) {
+    for (const auto& chapter : xtc->getChapters()) {
+      if (currentPage >= chapter.startPage && currentPage <= chapter.endPage) {
+        bookmark.chapter = chapter.name;
+        break;
+      }
     }
+  }
+  return bookmark;
+}
+
+void XtcReaderActivity::openChapterSelection() {
+  if (!xtc || !xtc->hasChapters() || xtc->getChapters().empty()) {
+    return;
+  }
+
+  startActivityForResult(
+      std::make_unique<XtcReaderChapterSelectionActivity>(renderer, mappedInput, xtc, currentPage),
+      [this](const ActivityResult& result) {
+        if (!result.isCancelled && xtc) {
+          currentPage = std::min(std::get<PageResult>(result.data).page, xtc->getPageCount() - 1);
+        }
+      });
+}
+
+void XtcReaderActivity::openBookmarks() {
+  if (!xtc) {
+    return;
+  }
+
+  startActivityForResult(
+      std::make_unique<BookmarkListActivity>(renderer, mappedInput, xtc->getPath(), getCurrentBookmark()),
+      [this](const ActivityResult& result) {
+        if (!result.isCancelled && xtc && xtc->getPageCount() > 0) {
+          currentPage = std::min(std::get<BookmarkResult>(result.data).page, xtc->getPageCount() - 1);
+        }
+      });
+}
+
+void XtcReaderActivity::openReaderMenu() {
+  if (!xtc || xtc->getPageCount() == 0) {
+    return;
+  }
+
+  const uint32_t page = std::min(currentPage, xtc->getPageCount() - 1);
+  const bool hasChapters = xtc->hasChapters() && !xtc->getChapters().empty();
+  startActivityForResult(
+      std::make_unique<DocumentReaderMenuActivity>(renderer, mappedInput, xtc->getTitle(), page + 1,
+                                                   xtc->getPageCount(), xtc->calculateProgress(page), hasChapters),
+      [this](const ActivityResult& result) {
+        if (result.isCancelled) {
+          return;
+        }
+
+        const auto action =
+            static_cast<DocumentReaderMenuActivity::MenuAction>(std::get<MenuResult>(result.data).action);
+        switch (action) {
+          case DocumentReaderMenuActivity::MenuAction::SelectChapter:
+            openChapterSelection();
+            break;
+          case DocumentReaderMenuActivity::MenuAction::Bookmarks:
+            openBookmarks();
+            break;
+          case DocumentReaderMenuActivity::MenuAction::GoHome:
+            onGoHome();
+            break;
+        }
+      });
+}
+
+void XtcReaderActivity::loop() {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    openReaderMenu();
+    return;
   }
 
   // Long press BACK (1s+) goes to file selection

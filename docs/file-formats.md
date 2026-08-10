@@ -102,6 +102,37 @@ if (parsedSize != fileSize) {
 }
 ```
 
+## 북마크 저장 형식
+
+북마크는 도서 캐시와 분리된 `/.crosspoint/bookmarks` 디렉터리에 도서별 JSON 파일로 저장됩니다. 따라서 EPUB
+레이아웃 캐시를 삭제하거나 다시 생성해도 북마크는 유지됩니다. 파일 이름은 도서 경로의 고정 FNV-1a 해시로 만들고,
+충돌이나 잘못된 파일을 감지할 수 있도록 원본 도서 경로도 함께 기록합니다.
+
+```json
+{
+  "version": 1,
+  "bookPath": "/books/example.epub",
+  "bookmarks": [
+    {
+      "spineIndex": 3,
+      "page": 12,
+      "pageCount": 40,
+      "bookProgress": 27,
+      "chapter": "3장"
+    }
+  ]
+}
+```
+
+- `spineIndex`: EPUB의 스파인 위치입니다. XTC와 텍스트처럼 페이지 기반 형식은 `-1`을 사용합니다.
+- `page`: 0부터 시작하는 현재 페이지입니다.
+- `pageCount`: 북마크를 저장할 당시 챕터 또는 문서의 전체 페이지 수입니다.
+- `bookProgress`: 화면에 표시할 전체 도서 진행률(0~100)입니다.
+- `chapter`: 북마크 목록에 표시할 챕터 제목입니다.
+
+EPUB은 글꼴이나 여백 설정에 따라 페이지 수가 달라질 수 있으므로, 이동할 때 저장된 `page/pageCount` 비율을 현재
+레이아웃에 적용합니다. 한 도서에는 최대 50개의 북마크를 저장합니다.
+
 ## `section.bin`
 
 ### Version 8

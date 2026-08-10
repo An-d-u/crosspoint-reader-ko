@@ -1,4 +1,4 @@
-﻿#include "EpubReaderActivity.h"
+#include "EpubReaderActivity.h"
 
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
@@ -12,6 +12,7 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "BookmarkListActivity.h"
 #include "EpubReaderChapterSelectionActivity.h"
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
@@ -330,6 +331,57 @@ void EpubReaderActivity::jumpToPercent(int percent) {
   }
 }
 
+Bookmark EpubReaderActivity::getCurrentBookmark() const {
+  Bookmark bookmark;
+  if (!epub || !section || section->pageCount <= 0 || section->currentPage < 0 ||
+      section->currentPage >= section->pageCount) {
+    return bookmark;
+  }
+
+  bookmark.spineIndex = currentSpineIndex;
+  bookmark.page = section->currentPage;
+  bookmark.pageCount = section->pageCount;
+  const float chapterProgress = static_cast<float>(section->currentPage + 1) / section->pageCount;
+  bookmark.bookProgress =
+      clampPercent(static_cast<int>(epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f + 0.5f));
+
+  const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
+  if (tocIndex >= 0 && tocIndex < epub->getTocItemsCount()) {
+    bookmark.chapter = epub->getTocItem(tocIndex).title;
+  }
+  return bookmark;
+}
+
+void EpubReaderActivity::openBookmarks() {
+  if (!epub) {
+    return;
+  }
+
+  startActivityForResult(
+      std::make_unique<BookmarkListActivity>(renderer, mappedInput, epub->getPath(), getCurrentBookmark()),
+      [this](const ActivityResult& result) {
+        if (result.isCancelled || !epub) {
+          return;
+        }
+
+        const BookmarkResult& bookmark = std::get<BookmarkResult>(result.data);
+        if (bookmark.spineIndex < 0 || bookmark.spineIndex >= epub->getSpineItemsCount() || bookmark.pageCount == 0) {
+          return;
+        }
+
+        RenderLock lock(*this);
+        currentSpineIndex = bookmark.spineIndex;
+        nextPageNumber = 0;
+        pendingSpineProgress = static_cast<float>(bookmark.page) / bookmark.pageCount;
+        pendingPercentJump = true;
+        cachedChapterTotalPageCount = 0;
+        pendingAnchor.clear();
+        footnoteDepth = 0;
+        clearPrefetchedPage();
+        section.reset();
+      });
+}
+
 void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
   switch (action) {
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
@@ -357,6 +409,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                                }
                                requestUpdate();
                              });
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::BOOKMARKS: {
+      openBookmarks();
       break;
     }
     case EpubReaderMenuActivity::MenuAction::GO_TO_PERCENT: {

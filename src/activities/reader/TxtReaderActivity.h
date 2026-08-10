@@ -4,6 +4,7 @@
 
 #include <vector>
 
+#include "BookmarkStore.h"
 #include "CrossPointSettings.h"
 #include "activities/Activity.h"
 
@@ -42,6 +43,9 @@ class TxtReaderActivity final : public Activity {
   void savePageIndexCache() const;
   void saveProgress() const;
   void loadProgress();
+  Bookmark getCurrentBookmark() const;
+  void openReaderMenu();
+  void openBookmarks();
 
  public:
   explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Txt> txt)

@@ -8,8 +8,12 @@
 #include <Serialization.h>
 #include <Utf8.h>
 
+#include <algorithm>
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "BookmarkListActivity.h"
+#include "DocumentReaderMenuActivity.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
@@ -122,7 +126,68 @@ void TxtReaderActivity::onExit() {
   txt.reset();
 }
 
+Bookmark TxtReaderActivity::getCurrentBookmark() const {
+  Bookmark bookmark;
+  if (!initialized || totalPages <= 0 || currentPage < 0 || currentPage >= totalPages) {
+    return bookmark;
+  }
+
+  bookmark.page = currentPage;
+  bookmark.pageCount = totalPages;
+  bookmark.bookProgress = static_cast<uint8_t>(std::min(100, (currentPage + 1) * 100 / totalPages));
+  return bookmark;
+}
+
+void TxtReaderActivity::openBookmarks() {
+  if (!txt || !initialized) {
+    return;
+  }
+
+  startActivityForResult(
+      std::make_unique<BookmarkListActivity>(renderer, mappedInput, txt->getPath(), getCurrentBookmark()),
+      [this](const ActivityResult& result) {
+        if (!result.isCancelled && totalPages > 0) {
+          const uint32_t page = std::get<BookmarkResult>(result.data).page;
+          currentPage = static_cast<int>(std::min<uint32_t>(page, static_cast<uint32_t>(totalPages - 1)));
+        }
+      });
+}
+
+void TxtReaderActivity::openReaderMenu() {
+  if (!txt || !initialized || totalPages <= 0) {
+    return;
+  }
+
+  const int progress = std::min(100, (currentPage + 1) * 100 / totalPages);
+  startActivityForResult(
+      std::make_unique<DocumentReaderMenuActivity>(renderer, mappedInput, txt->getTitle(), currentPage + 1,
+                                                   totalPages, progress, false),
+      [this](const ActivityResult& result) {
+        if (result.isCancelled) {
+          return;
+        }
+
+        const auto action =
+            static_cast<DocumentReaderMenuActivity::MenuAction>(std::get<MenuResult>(result.data).action);
+        switch (action) {
+          case DocumentReaderMenuActivity::MenuAction::Bookmarks:
+            openBookmarks();
+            break;
+          case DocumentReaderMenuActivity::MenuAction::GoHome:
+            onGoHome();
+            break;
+          case DocumentReaderMenuActivity::MenuAction::SelectChapter:
+            break;
+        }
+      });
+}
+
 void TxtReaderActivity::loop() {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    openReaderMenu();
+    return;
+  }
+
   // Long press BACK (1s+) goes to file selection
   if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
     activityManager.goToFileBrowser(txt ? txt->getPath() : "");
