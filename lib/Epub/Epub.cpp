@@ -8,6 +8,8 @@
 #include <PngToBmpConverter.h>
 #include <ZipFile.h>
 
+#include <algorithm>
+
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/TocNavParser.h"
@@ -255,6 +257,36 @@ bool Epub::parseTocNavFile() const {
   return true;
 }
 
+void Epub::discoverCssFilesFromZip() {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
+    LOG_ERR("EBP", "Cannot discover CSS from ZIP because book metadata cache is not loaded");
+    return;
+  }
+
+  ZipFile zf(filepath);
+  if (!zf.loadAllFileStatSlims()) {
+    LOG_ERR("EBP", "Failed to load ZIP file stat slims for CSS discovery");
+    return;
+  }
+
+  const size_t lastSlash = contentBasePath.find_last_of('/');
+  const std::string opfDir = lastSlash != std::string::npos ? contentBasePath.substr(0, lastSlash + 1) : "";
+
+  zf.enumerateFilePaths([&](const std::string_view filePath) {
+    // OPF와 같은 디렉터리 또는 그 하위 디렉터리의 CSS만 탐색한다.
+    if (!opfDir.empty() && filePath.find(opfDir) != 0) {
+      return;
+    }
+
+    if (FsHelpers::hasCssExtension(filePath) &&
+        std::find(cssFiles.begin(), cssFiles.end(), filePath) == cssFiles.end()) {
+      LOG_DBG("EBP", "Discovered CSS file via ZIP enumeration: %.*s", static_cast<int>(filePath.size()),
+              filePath.data());
+      cssFiles.emplace_back(filePath);
+    }
+  });
+}
+
 void Epub::parseCssFiles() const {
   // Maximum CSS file size we'll attempt to parse (uncompressed)
   // Larger files risk memory exhaustion on ESP32
@@ -329,9 +361,8 @@ void Epub::parseCssFiles() const {
   if (!cssParser->saveToCache()) {
     LOG_ERR("EBP", "Failed to save CSS rules to cache");
   }
-  cssParser->clear();
-
   LOG_DBG("EBP", "Loaded %zu CSS style rules from %zu files", cssParser->ruleCount(), cssFiles.size());
+  cssParser->clear();
 }
 
 // load in the meta data for the epub file
@@ -354,6 +385,8 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
         if (!parseContentOpf(bookMetadataCache->coreMetadata)) {
           LOG_ERR("EBP", "Could not parse content.opf from cached bookMetadata for CSS files");
           // continue anyway - book will work without CSS and we'll still load any inline style CSS
+        } else {
+          discoverCssFilesFromZip();
         }
         parseCssFiles();
         // Invalidate section caches so they are rebuilt with the new CSS
@@ -457,6 +490,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   }
 
   if (!skipLoadingCss) {
+    discoverCssFilesFromZip();
     // Parse CSS files after cache reload
     parseCssFiles();
     Storage.removeDir((cachePath + "/sections").c_str());
@@ -895,10 +929,10 @@ float Epub::calculateProgress(const int currentSpineIndex, const float currentSp
 int Epub::resolveHrefToSpineIndex(const std::string& href) const {
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) return -1;
 
-  // Extract filename (remove #anchor)
-  std::string target = href;
-  size_t hashPos = target.find('#');
-  if (hashPos != std::string::npos) target = target.substr(0, hashPos);
+  // 파일명에 인코딩된 '#'이 포함될 수 있으므로 앵커를 먼저 분리한 뒤 경로를 디코딩한다.
+  const size_t hashPos = href.find('#');
+  const std::string rawTarget = hashPos != std::string::npos ? href.substr(0, hashPos) : href;
+  const std::string target = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(rawTarget));
 
   // Same-file reference (anchor-only)
   if (target.empty()) return -1;

@@ -24,6 +24,10 @@ const char INDEX_HTML[] PROGMEM = R"HTML(
     button{padding:12px;border:0;border-radius:8px;background:#111;color:#fff}
     button:disabled{background:#888}
     .hint{color:#555;font-size:14px}
+    .drop-zone{margin-top:12px;padding:18px;border:2px dashed #aaa;border-radius:10px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s}
+    .drop-zone.dragover{border-color:#111;background:#f0f0eb}
+    .drop-zone input{margin-top:0}
+    .drop-hint{margin:8px 0 0;color:#555;font-size:14px;pointer-events:none}
     .file{margin-top:14px;padding:10px;border:1px solid #ddd;border-radius:8px;background:#fafafa}
     .name{font-weight:700;word-break:break-all}
     .meta{font-size:13px;color:#555;margin-top:4px}
@@ -38,7 +42,10 @@ const char INDEX_HTML[] PROGMEM = R"HTML(
     <h1>CrossPoint File Transfer</h1>
     <p class="hint">EPUB/TXT/XTC files are saved to <code>/books</code>.</p>
     <form id="uploadForm">
-      <input id="fileInput" type="file" name="file" accept=".epub,.txt,.xtc,.xtch,application/epub+zip,text/plain" multiple required>
+      <div id="dropZone" class="drop-zone" role="button" tabindex="0">
+        <input id="fileInput" type="file" name="file" accept=".epub,.txt,.xtc,.xtch,application/epub+zip,text/plain" multiple required>
+        <p class="drop-hint">Drop files here or click to select</p>
+      </div>
       <button id="uploadButton" type="submit">Upload</button>
     </form>
     <section id="progressList"></section>
@@ -48,6 +55,45 @@ const char INDEX_HTML[] PROGMEM = R"HTML(
     const input = document.getElementById('fileInput');
     const button = document.getElementById('uploadButton');
     const list = document.getElementById('progressList');
+    const dropZone = document.getElementById('dropZone');
+    let dragDepth = 0;
+
+    function openFilePicker(event) {
+      if (!input.disabled && event.target !== input) input.click();
+    }
+
+    dropZone.addEventListener('click', openFilePicker);
+    dropZone.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openFilePicker(event);
+      }
+    });
+    dropZone.addEventListener('dragenter', (event) => {
+      event.preventDefault();
+      dragDepth++;
+      if (!input.disabled) dropZone.classList.add('dragover');
+    });
+    dropZone.addEventListener('dragover', (event) => {
+      // 브라우저가 드롭한 파일을 직접 열지 않도록 기본 동작을 막는다.
+      event.preventDefault();
+    });
+    dropZone.addEventListener('dragleave', (event) => {
+      event.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) dropZone.classList.remove('dragover');
+    });
+    dropZone.addEventListener('drop', (event) => {
+      event.preventDefault();
+      dragDepth = 0;
+      dropZone.classList.remove('dragover');
+      if (input.disabled || !event.dataTransfer || !event.dataTransfer.files.length) return;
+
+      // 기존 선택 및 업로드 흐름을 그대로 재사용한다.
+      const transfer = new DataTransfer();
+      for (const file of event.dataTransfer.files) transfer.items.add(file);
+      input.files = transfer.files;
+    });
 
     function fmt(bytes) {
       if (bytes < 1024) return bytes + ' B';
@@ -212,13 +258,9 @@ void CrossPointWebServer::handleClient() {
   }
 }
 
-void CrossPointWebServer::handleRoot() const {
-  server->send_P(200, "text/html; charset=utf-8", INDEX_HTML);
-}
+void CrossPointWebServer::handleRoot() const { server->send_P(200, "text/html; charset=utf-8", INDEX_HTML); }
 
-void CrossPointWebServer::handleStatus() const {
-  server->send(200, "application/json", "{\"ok\":true}");
-}
+void CrossPointWebServer::handleStatus() const { server->send(200, "application/json", "{\"ok\":true}"); }
 
 void CrossPointWebServer::handleUpload() {
   HTTPUpload& upload = server->upload();

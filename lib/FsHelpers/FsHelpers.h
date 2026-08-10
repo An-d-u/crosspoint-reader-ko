@@ -6,6 +6,8 @@
 
 namespace FsHelpers {
 
+std::string decodeUriEscapes(const std::string& path);
+
 std::string normalisePath(const std::string& path);
 
 /**
@@ -54,6 +56,12 @@ inline bool hasTxtExtension(const String& fileName) {
 
 // Check for .md extension (case-insensitive)
 bool hasMarkdownExtension(std::string_view fileName);
+
+// .css 확장자인지 대소문자 구분 없이 확인한다.
+bool hasCssExtension(std::string_view fileName);
+inline bool hasCssExtension(const String& fileName) {
+  return hasCssExtension(std::string_view{fileName.c_str(), fileName.length()});
+}
 
 std::string extractFolderPath(const std::string& filePath);
 

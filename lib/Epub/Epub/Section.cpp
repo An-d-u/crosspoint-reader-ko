@@ -1,22 +1,21 @@
-﻿#include "Section.h"
+#include "Section.h"
 
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Serialization.h>
 
+#include "../../../src/fontIds.h"
 #include "Epub/css/CssParser.h"
 #include "Page.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
-#include "../../../src/fontIds.h"
 
 namespace {
-constexpr uint8_t SECTION_FILE_VERSION =
-    32;  // 한국어판 레이아웃 + 루비 오버레이 + 세로쓰기 루비 배치
+constexpr uint8_t SECTION_FILE_VERSION = 33;  // 중첩 블록 스타일 스택 반영
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(bool) +
-                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) +
-                                  sizeof(bool) + sizeof(uint8_t) + sizeof(bool) + sizeof(uint16_t) + sizeof(uint32_t) +
-                                  sizeof(uint32_t);
+                                 sizeof(uint8_t) + sizeof(bool) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) +
+                                 sizeof(bool) + sizeof(uint8_t) + sizeof(bool) + sizeof(uint16_t) + sizeof(uint32_t) +
+                                 sizeof(uint32_t);
 }  // namespace
 
 uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
@@ -38,21 +37,21 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
 
 void Section::writeSectionFileHeader(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
                                      const bool paragraphIndent, const uint8_t paragraphAlignment,
-                                      const bool characterWrap, const uint16_t viewportWidth,
-                                      const uint16_t viewportHeight, const bool hyphenationEnabled,
-                                      const bool embeddedStyle, const uint8_t imageRendering,
-                                      const bool verticalWritingMode) {
+                                     const bool characterWrap, const uint16_t viewportWidth,
+                                     const uint16_t viewportHeight, const bool hyphenationEnabled,
+                                     const bool embeddedStyle, const uint8_t imageRendering,
+                                     const bool verticalWritingMode) {
   if (!file) {
     LOG_DBG("SCT", "File not open for writing header");
     return;
   }
   static_assert(HEADER_SIZE == sizeof(SECTION_FILE_VERSION) + sizeof(fontId) + sizeof(lineCompression) +
                                    sizeof(extraParagraphSpacing) + sizeof(paragraphIndent) +
-                                    sizeof(paragraphAlignment) + sizeof(characterWrap) + sizeof(viewportWidth) +
-                                    sizeof(viewportHeight) + sizeof(hyphenationEnabled) + sizeof(embeddedStyle) +
-                                    sizeof(imageRendering) + sizeof(verticalWritingMode) + sizeof(pageCount) +
-                                    sizeof(uint32_t) + sizeof(uint32_t),
-                 "Header size mismatch");
+                                   sizeof(paragraphAlignment) + sizeof(characterWrap) + sizeof(viewportWidth) +
+                                   sizeof(viewportHeight) + sizeof(hyphenationEnabled) + sizeof(embeddedStyle) +
+                                   sizeof(imageRendering) + sizeof(verticalWritingMode) + sizeof(pageCount) +
+                                   sizeof(uint32_t) + sizeof(uint32_t),
+                "Header size mismatch");
   serialization::writePod(file, SECTION_FILE_VERSION);
   serialization::writePod(file, fontId);
   serialization::writePod(file, lineCompression);
@@ -72,10 +71,10 @@ void Section::writeSectionFileHeader(const int fontId, const float lineCompressi
 }
 
 bool Section::loadSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                               const bool paragraphIndent, const uint8_t paragraphAlignment, const bool characterWrap,
-                               const uint16_t viewportWidth, const uint16_t viewportHeight,
-                               const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering,
-                               const bool respectEpubVerticalWriting) {
+                              const bool paragraphIndent, const uint8_t paragraphAlignment, const bool characterWrap,
+                              const uint16_t viewportWidth, const uint16_t viewportHeight,
+                              const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering,
+                              const bool respectEpubVerticalWriting) {
   pagePositions.clear();
   verticalWritingMode = false;
 
@@ -204,10 +203,10 @@ bool Section::clearCache() {
 }
 
 bool Section::createSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                                 const bool paragraphIndent, const uint8_t paragraphAlignment, const bool characterWrap,
-                                 const uint16_t viewportWidth, const uint16_t viewportHeight,
-                                 const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering,
-                                 const bool respectEpubVerticalWriting, const std::function<void()>& popupFn) {
+                                const bool paragraphIndent, const uint8_t paragraphAlignment, const bool characterWrap,
+                                const uint16_t viewportWidth, const uint16_t viewportHeight,
+                                const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering,
+                                const bool respectEpubVerticalWriting, const std::function<void()>& popupFn) {
   pagePositions.clear();
   verticalWritingMode = false;
   const auto localPath = epub->getSpineItem(spineIndex).href;
@@ -274,8 +273,8 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     return false;
   }
   writeSectionFileHeader(fontId, lineCompression, extraParagraphSpacing, paragraphIndent, paragraphAlignment,
-                          characterWrap, viewportWidth, viewportHeight, hyphenationEnabled, embeddedStyle,
-                          imageRendering, verticalWritingMode);
+                         characterWrap, viewportWidth, viewportHeight, hyphenationEnabled, embeddedStyle,
+                         imageRendering, verticalWritingMode);
   std::vector<uint32_t> lut = {};
 
   // Derive the content base directory and image cache path prefix for the parser
@@ -345,9 +344,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   return true;
 }
 
-std::unique_ptr<Page> Section::loadPageFromSectionFile() {
-  return loadPageFromSectionFile(currentPage);
-}
+std::unique_ptr<Page> Section::loadPageFromSectionFile() { return loadPageFromSectionFile(currentPage); }
 
 std::unique_ptr<Page> Section::loadPageFromSectionFile(const int pageNumber) {
   if (pageNumber < 0 || pageNumber >= pageCount) {

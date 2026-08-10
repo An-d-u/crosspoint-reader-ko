@@ -1,15 +1,16 @@
-﻿#include "ChapterHtmlSlimParser.h"
+#include "ChapterHtmlSlimParser.h"
 
-#include <cmath>
-#include <cstdlib>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Utf8.h>
-#include <algorithm>
-#include <cstring>
 #include <expat.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
 
 #include "../../Epub.h"
 #include "../Page.h"
@@ -222,6 +223,7 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   partWordBufferIndex = 0;
   nextWordContinues = false;
   suppressWhitespaceAfterRuby = false;
+  listItemBulletOnly = false;
 }
 
 void ChapterHtmlSlimParser::flushRubyToTextBlock() {
@@ -234,6 +236,7 @@ void ChapterHtmlSlimParser::flushRubyToTextBlock() {
   if (!rubyBaseBuffer.empty()) {
     currentTextBlock->addWord(std::move(rubyBaseBuffer), currentFontStyle(), false, nextWordContinues,
                               std::move(rubyTextBuffer));
+    listItemBulletOnly = false;
     nextWordContinues = true;
     suppressWhitespaceAfterRuby = true;
   }
@@ -248,11 +251,22 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   if (currentTextBlock) {
     // already have a text block running and it is empty - just reuse it
     if (currentTextBlock->isEmpty()) {
-      // Merge with existing block style to accumulate CSS styling from parent block elements.
-      // This handles cases like <div style="margin-bottom:2em"><h1>text</h1></div> where the
-      // div's margin should be preserved, even though it has no direct text content.
-      currentTextBlock->setBlockStyle(currentTextBlock->getBlockStyle().getCombinedBlockStyle(blockStyle));
+      // 컨테이너의 세로 여백만 현재 빈 블록에 누적한다.
+      const auto style = currentTextBlock->getBlockStyle();
+      currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(blockStyle, BlockStyle::CombineAxis::Vertical));
 
+      if (!pendingAnchorId.empty()) {
+        anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
+        pendingAnchorId.clear();
+      }
+      return;
+    }
+
+    // <li>의 글머리표 뒤에 블록 요소가 열려도 글머리표가 홀로 한 줄을 차지하지 않게 한다.
+    if (listItemBulletOnly) {
+      const auto style = currentTextBlock->getBlockStyle();
+      currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(blockStyle, BlockStyle::CombineAxis::Vertical));
+      listItemBulletOnly = false;
       if (!pendingAnchorId.empty()) {
         anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
         pendingAnchorId.clear();
@@ -270,6 +284,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   currentTextBlock.reset(
       new ParsedText(extraParagraphSpacing, paragraphIndent, characterWrap, hyphenationEnabled, blockStyle));
   wordsExtractedInBlock = 0;
+  listItemBulletOnly = false;
 }
 
 bool ChapterHtmlSlimParser::tryHandleRasterImage(const std::string& rawHref, const std::string& alt,
@@ -334,42 +349,53 @@ bool ChapterHtmlSlimParser::tryHandleRasterImage(const std::string& rawHref, con
   const bool hasCssHeight = imgStyle.hasImageHeight();
   const bool hasCssWidth = imgStyle.hasImageWidth();
 
+  // 퍼센트 이미지 크기는 화면 전체가 아니라 누적된 부모 컨테이너 너비를 기준으로 계산한다.
+  int containerWidth = viewportWidth;
+  int containerLeft = 0;
+  if (currentTextBlock) {
+    const int horizontalInset = currentTextBlock->getBlockStyle().totalHorizontalInset();
+    if (horizontalInset > 0 && horizontalInset < viewportWidth) {
+      containerWidth = viewportWidth - horizontalInset;
+      containerLeft = currentTextBlock->getBlockStyle().leftInset();
+    }
+  }
+
   if (hasCssHeight && hasCssWidth && dims.width > 0 && dims.height > 0) {
     displayHeight = static_cast<int>(imgStyle.imageHeight.toPixels(emSize, static_cast<float>(viewportHeight)) + 0.5f);
-    displayWidth = static_cast<int>(imgStyle.imageWidth.toPixels(emSize, static_cast<float>(viewportWidth)) + 0.5f);
-    clampSizeToViewport(displayWidth, displayHeight, viewportWidth, viewportHeight,
+    displayWidth = static_cast<int>(imgStyle.imageWidth.toPixels(emSize, static_cast<float>(containerWidth)) + 0.5f);
+    clampSizeToViewport(displayWidth, displayHeight, containerWidth, viewportHeight,
                         (displayHeight > 0) ? static_cast<float>(displayWidth) / displayHeight : preferredAspect);
     LOG_DBG("EHP", "Display size from CSS height+width: %dx%d", displayWidth, displayHeight);
   } else if (hasCssHeight && !hasCssWidth && dims.width > 0 && dims.height > 0) {
     displayHeight = static_cast<int>(imgStyle.imageHeight.toPixels(emSize, static_cast<float>(viewportHeight)) + 0.5f);
     displayHeight = std::max(1, displayHeight);
     displayWidth = static_cast<int>(displayHeight * intrinsicAspect + 0.5f);
-    clampSizeToViewport(displayWidth, displayHeight, viewportWidth, viewportHeight, intrinsicAspect);
+    clampSizeToViewport(displayWidth, displayHeight, containerWidth, viewportHeight, intrinsicAspect);
     LOG_DBG("EHP", "Display size from CSS height: %dx%d", displayWidth, displayHeight);
   } else if (hasCssWidth && !hasCssHeight && dims.width > 0 && dims.height > 0) {
-    displayWidth = static_cast<int>(imgStyle.imageWidth.toPixels(emSize, static_cast<float>(viewportWidth)) + 0.5f);
+    displayWidth = static_cast<int>(imgStyle.imageWidth.toPixels(emSize, static_cast<float>(containerWidth)) + 0.5f);
     displayWidth = std::max(1, displayWidth);
     displayHeight = static_cast<int>(displayWidth * (static_cast<float>(dims.height) / dims.width) + 0.5f);
-    clampSizeToViewport(displayWidth, displayHeight, viewportWidth, viewportHeight, intrinsicAspect);
+    clampSizeToViewport(displayWidth, displayHeight, containerWidth, viewportHeight, intrinsicAspect);
     LOG_DBG("EHP", "Display size from CSS width: %dx%d", displayWidth, displayHeight);
   } else if (hintedWidth > 0 && hintedHeight > 0) {
     displayWidth = hintedWidth;
     displayHeight = hintedHeight;
-    clampSizeToViewport(displayWidth, displayHeight, viewportWidth, viewportHeight,
+    clampSizeToViewport(displayWidth, displayHeight, containerWidth, viewportHeight,
                         static_cast<float>(hintedWidth) / hintedHeight);
     LOG_DBG("EHP", "Display size from SVG width+height: %dx%d", displayWidth, displayHeight);
   } else if (hintedHeight > 0) {
     displayHeight = hintedHeight;
     displayWidth = std::max(1, static_cast<int>(displayHeight * preferredAspect + 0.5f));
-    clampSizeToViewport(displayWidth, displayHeight, viewportWidth, viewportHeight, preferredAspect);
+    clampSizeToViewport(displayWidth, displayHeight, containerWidth, viewportHeight, preferredAspect);
     LOG_DBG("EHP", "Display size from SVG height: %dx%d", displayWidth, displayHeight);
   } else if (hintedWidth > 0) {
     displayWidth = hintedWidth;
     displayHeight = std::max(1, static_cast<int>(displayWidth / preferredAspect + 0.5f));
-    clampSizeToViewport(displayWidth, displayHeight, viewportWidth, viewportHeight, preferredAspect);
+    clampSizeToViewport(displayWidth, displayHeight, containerWidth, viewportHeight, preferredAspect);
     LOG_DBG("EHP", "Display size from SVG width: %dx%d", displayWidth, displayHeight);
   } else {
-    int maxWidth = viewportWidth;
+    int maxWidth = containerWidth;
     int maxHeight = viewportHeight;
     const float scaleX = (dims.width > maxWidth) ? static_cast<float>(maxWidth) / dims.width : 1.0f;
     const float scaleY = (dims.height > maxHeight) ? static_cast<float>(maxHeight) / dims.height : 1.0f;
@@ -389,7 +415,17 @@ bool ChapterHtmlSlimParser::tryHandleRasterImage(const std::string& rawHref, con
     startNewTextBlock(parentBlockStyle);
   }
 
-  if (currentPage && !currentPage->elements.empty() && (currentPageNextY + displayHeight > viewportHeight)) {
+  int16_t imageMarginTop = 0;
+  int16_t imageMarginBottom = 0;
+  if (currentTextBlock && currentTextBlock->isEmpty()) {
+    imageMarginTop = currentTextBlock->getBlockStyle().topInset();
+    if (blockStyleStack.size() > 1) {
+      imageMarginBottom = blockStyleStack.back().bottomInset();
+    }
+  }
+
+  if (currentPage && !currentPage->elements.empty() &&
+      (currentPageNextY + imageMarginTop + displayHeight + imageMarginBottom > viewportHeight)) {
     completePageFn(std::move(currentPage));
     completedPageCount++;
     currentPage.reset(new Page());
@@ -407,19 +443,30 @@ bool ChapterHtmlSlimParser::tryHandleRasterImage(const std::string& rawHref, con
     currentPageNextY = 0;
   }
 
+  currentPageNextY += imageMarginTop;
+
   auto imageBlock = std::make_shared<ImageBlock>(cachedImagePath, displayWidth, displayHeight);
   if (!imageBlock) {
     LOG_ERR("EHP", "Failed to create ImageBlock");
     return false;
   }
-  const int xPos = (viewportWidth - displayWidth) / 2;
+  const int xPos = containerLeft + (containerWidth - displayWidth) / 2;
   auto pageImage = std::make_shared<PageImage>(imageBlock, xPos, currentPageNextY);
   if (!pageImage) {
     LOG_ERR("EHP", "Failed to create PageImage");
     return false;
   }
   currentPage->elements.push_back(pageImage);
-  currentPageNextY += displayHeight;
+  currentPageNextY += displayHeight + imageMarginBottom;
+
+  // 이미지가 소비한 세로 여백이 다음 문단에 다시 적용되지 않도록 빈 블록을 초기화한다.
+  if (currentTextBlock && currentTextBlock->isEmpty()) {
+    BlockStyle resetStyle;
+    resetStyle.alignment = paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None)
+                               ? CssTextAlign::Justify
+                               : static_cast<CssTextAlign>(paragraphAlignment);
+    currentTextBlock->setBlockStyle(resetStyle);
+  }
   return true;
 }
 
@@ -675,7 +722,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       // Fallback to alt text if image processing fails
       if (!alt.empty()) {
         alt = "[Image: " + alt + "]";
-        self->startNewTextBlock(centeredBlockStyle);
+        self->startNewTextBlock(self->blockStyleStack.back()
+                                    .getCombinedBlockStyle(centeredBlockStyle, BlockStyle::CombineAxis::Horizontal)
+                                    .withoutBottom());
         self->italicUntilDepth = std::min(self->italicUntilDepth, self->depth);
         self->depth += 1;
         self->characterData(userData, alt.c_str(), alt.length());
@@ -765,7 +814,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (self->embeddedStyle && cssStyle.hasTextAlign()) {
       headerBlockStyle.alignment = cssStyle.textAlign;
     }
-    self->startNewTextBlock(headerBlockStyle);
+    const auto accumulated =
+        self->blockStyleStack.back().getCombinedBlockStyle(headerBlockStyle, BlockStyle::CombineAxis::Horizontal);
+    self->blockStyleStack.push_back(accumulated);
+    self->startNewTextBlock(accumulated.withoutBottom());
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, BLOCK_TAGS, NUM_BLOCK_TAGS)) {
@@ -774,14 +826,18 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         // flush word preceding <br/> to currentTextBlock before calling startNewTextBlock
         self->flushPartWordBuffer();
       }
-      self->startNewTextBlock(self->currentTextBlock->getBlockStyle());
+      self->startNewTextBlock(self->blockStyleStack.back().withoutBottom());
     } else {
       self->currentCssStyle = cssStyle;
-      self->startNewTextBlock(userAlignmentBlockStyle);
+      const auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
+                                                                                  BlockStyle::CombineAxis::Horizontal);
+      self->blockStyleStack.push_back(accumulated);
+      self->startNewTextBlock(accumulated.withoutBottom());
       self->updateEffectiveInlineStyle();
 
       if (strcmp(name, "li") == 0) {
         self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR);
+        self->listItemBulletOnly = true;
       }
     }
   } else if (matches(name, UNDERLINE_TAGS, NUM_UNDERLINE_TAGS)) {
@@ -1087,6 +1143,15 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
 
+  // 건너뛰는 요소와 그 자식은 시작 시 스타일 스택에 들어오지 않았으므로 종료 처리도 생략한다.
+  if (self->skipUntilDepth != INT_MAX) {
+    self->depth -= 1;
+    if (self->skipUntilDepth == self->depth) {
+      self->skipUntilDepth = INT_MAX;
+    }
+    return;
+  }
+
   if (self->insideSvgWrapper) {
     self->depth -= 1;
     if (tagLocalEquals(name, "svg") && self->depth == self->svgWrapperDepth) {
@@ -1100,9 +1165,8 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     return;
   }
 
-  if (self->insideRuby &&
-      (tagLocalEquals(name, "rt") || tagLocalEquals(name, "rb") || tagLocalEquals(name, "rp") ||
-       tagLocalEquals(name, "ruby"))) {
+  if (self->insideRuby && (tagLocalEquals(name, "rt") || tagLocalEquals(name, "rb") || tagLocalEquals(name, "rp") ||
+                           tagLocalEquals(name, "ruby"))) {
     self->depth -= 1;
 
     if (tagLocalEquals(name, "rt")) {
@@ -1186,11 +1250,6 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->insideFootnoteLink = false;
   }
 
-  // Leaving skip
-  if (self->skipUntilDepth == self->depth) {
-    self->skipUntilDepth = INT_MAX;
-  }
-
   if (self->tableDepth == 1 && (strcmp(name, "td") == 0 || strcmp(name, "th") == 0)) {
     self->nextWordContinues = false;
   }
@@ -1228,34 +1287,42 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->updateEffectiveInlineStyle();
   }
 
-  // Clear block style when leaving header or block elements
+  // 헤더나 블록 요소를 벗어나면 부모의 누적 스타일로 복귀한다.
   if (headerOrBlockTag) {
     self->currentCssStyle.reset();
     self->updateEffectiveInlineStyle();
 
-    // Reset alignment on empty text blocks to prevent stale alignment from bleeding
-    // into the next sibling element. This fixes issue #1026 where an empty <h1> (default
-    // Center) followed by an image-only <p> causes Center to persist through the chain
-    // of empty block reuse into subsequent text paragraphs.
-    // Margins/padding are preserved so parent element spacing still accumulates correctly.
-    if (self->currentTextBlock && self->currentTextBlock->isEmpty()) {
-      auto style = self->currentTextBlock->getBlockStyle();
-      style.textAlignDefined = false;
-      style.alignment = (self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
-                            ? CssTextAlign::Justify
-                            : static_cast<CssTextAlign>(self->paragraphAlignment);
-      self->currentTextBlock->setBlockStyle(style);
+    // <br>은 컨테이너가 아니므로 스타일 스택을 변경하지 않는다.
+    if (strcmp(name, "br") != 0 && self->blockStyleStack.size() > 1) {
+      if (self->currentTextBlock) {
+        const auto style = self->currentTextBlock->getBlockStyle();
+        self->currentTextBlock->setBlockStyle(style.addBottom(self->blockStyleStack.back()));
+      }
+      self->blockStyleStack.pop_back();
+
+      // 닫힌 요소의 정렬과 여백이 다음 형제 텍스트로 새지 않도록 부모 블록으로 분리한다.
+      self->startNewTextBlock(self->blockStyleStack.back());
+    }
+
+    if (strcmp(name, "li") == 0) {
+      self->listItemBulletOnly = false;
     }
   }
 }
 
 bool ChapterHtmlSlimParser::parseAndBuildPages() {
+  // 열린 블록 요소의 누적 스타일을 추적할 루트 항목을 준비한다.
+  BlockStyle rootBlockStyle;
+  rootBlockStyle.alignment = (this->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
+                                 ? CssTextAlign::Justify
+                                 : static_cast<CssTextAlign>(this->paragraphAlignment);
+  blockStyleStack.clear();
+  blockStyleStack.reserve(8);
+  blockStyleStack.push_back(rootBlockStyle);
+
   auto paragraphAlignmentBlockStyle = BlockStyle();
   paragraphAlignmentBlockStyle.textAlignDefined = true;
-  // Resolve None sentinel to Justify for initial block (no CSS context yet)
-  const auto align = (this->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
-                         ? CssTextAlign::Justify
-                         : static_cast<CssTextAlign>(this->paragraphAlignment);
+  const auto align = rootBlockStyle.alignment;
   paragraphAlignmentBlockStyle.alignment = align;
   startNewTextBlock(paragraphAlignmentBlockStyle);
 
@@ -1346,7 +1413,8 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 }
 
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
-  const int lineHeight = line->getRenderedLineHeight(renderer, fontId, rubyFontId, lineCompression, verticalWritingMode);
+  const int lineHeight =
+      line->getRenderedLineHeight(renderer, fontId, rubyFontId, lineCompression, verticalWritingMode);
 
   if (!currentPage) {
     currentPage.reset(new Page());
@@ -1370,9 +1438,8 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   }
   pendingFootnotes.erase(pendingFootnotes.begin(), footnoteIt);
 
-  const int16_t xOffset =
-      verticalWritingMode ? static_cast<int16_t>(viewportWidth - currentPageNextY - lineHeight)
-                          : line->getBlockStyle().leftInset();
+  const int16_t xOffset = verticalWritingMode ? static_cast<int16_t>(viewportWidth - currentPageNextY - lineHeight)
+                                              : line->getBlockStyle().leftInset();
   const int16_t yOffset = verticalWritingMode ? line->getBlockStyle().leftInset() : currentPageNextY;
   currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, yOffset));
   currentPageNextY += lineHeight;

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <expat.h>
 
@@ -67,6 +67,7 @@ class ChapterHtmlSlimParser {
     bool hasUnderline = false, underline = false;
   };
   std::vector<StyleStackEntry> inlineStyleStack;
+  std::vector<BlockStyle> blockStyleStack;
   CssStyle currentCssStyle;
   bool effectiveBold = false;
   bool effectiveItalic = false;
@@ -74,6 +75,7 @@ class ChapterHtmlSlimParser {
   int tableDepth = 0;
   int tableRowIndex = 0;
   int tableColIndex = 0;
+  bool listItemBulletOnly = false;
 
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
@@ -120,14 +122,14 @@ class ChapterHtmlSlimParser {
   explicit ChapterHtmlSlimParser(std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer,
                                  const int fontId, const int rubyFontId, const float lineCompression,
                                  const bool extraParagraphSpacing, const bool paragraphIndent,
-                                 const uint8_t paragraphAlignment, const bool characterWrap, const uint16_t viewportWidth,
-                                 const uint16_t viewportHeight,
+                                 const uint8_t paragraphAlignment, const bool characterWrap,
+                                 const uint16_t viewportWidth, const uint16_t viewportHeight,
                                  const bool hyphenationEnabled,
                                  const std::function<void(std::unique_ptr<Page>)>& completePageFn,
-                                  const bool embeddedStyle, const std::string& contentBase,
-                                  const std::string& imageBasePath, const uint8_t imageRendering = 0,
-                                  const bool verticalWritingMode = false,
-                                  const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr)
+                                 const bool embeddedStyle, const std::string& contentBase,
+                                 const std::string& imageBasePath, const uint8_t imageRendering = 0,
+                                 const bool verticalWritingMode = false, const std::function<void()>& popupFn = nullptr,
+                                 const CssParser* cssParser = nullptr)
 
       : epub(epub),
         filepath(filepath),
