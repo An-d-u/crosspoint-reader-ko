@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -7,6 +8,13 @@ struct RecentBook {
   std::string title;
   std::string author;
   std::string coverBmpPath;
+
+  // 홈 화면에서만 사용하는 임시 진행 정보입니다. 최근 도서 JSON에는 저장하지 않습니다.
+  bool hasBookProgress = false;
+  uint8_t bookProgress = 0;
+  bool hasChapterProgress = false;
+  uint8_t chapterProgress = 0;
+  std::string currentChapter;
 
   bool operator==(const RecentBook& other) const { return path == other.path; }
 };

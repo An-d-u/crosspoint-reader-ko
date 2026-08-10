@@ -40,7 +40,23 @@ constexpr int maxListValueWidth = 200;
 constexpr int mainMenuIconSize = 32;
 constexpr int listIconSize = 24;
 constexpr int mainMenuColumns = 2;
+constexpr int homeProgressBarHeight = 8;
 int coverWidth = 0;
+
+void drawHomeProgress(const GfxRenderer& renderer, int x, int y, int width, const char* label, uint8_t progress) {
+  const std::string percentage = std::to_string(progress) + "%";
+  const int percentageWidth = renderer.getTextWidth(UI_10_FONT_ID, percentage.c_str());
+
+  renderer.drawText(UI_10_FONT_ID, x, y, label, true, EpdFontFamily::BOLD);
+  renderer.drawText(UI_10_FONT_ID, x + width - percentageWidth, y, percentage.c_str(), true, EpdFontFamily::BOLD);
+
+  const int barY = y + renderer.getLineHeight(UI_10_FONT_ID);
+  renderer.drawRect(x, barY, width, homeProgressBarHeight, true);
+  const int fillWidth = (width - 4) * progress / 100;
+  if (fillWidth > 0) {
+    renderer.fillRect(x + 2, barY + 2, fillWidth, homeProgressBarHeight - 4, true);
+  }
+}
 
 void drawLyraBatteryIcon(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight,
                          uint16_t percentage) {
@@ -417,7 +433,7 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
   // Draw cover image as background if available (inside the box)
   // Only load from SD on first render, then use stored buffer
   if (hasContinueReading) {
-    RecentBook book = recentBooks[0];
+    const RecentBook& book = recentBooks[0];
     if (!coverRendered) {
       std::string coverPath = book.coverBmpPath;
       bool hasCover = true;
@@ -476,14 +492,17 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
                                hPaddingInSelection, cornerRadius, false, false, true, true, Color::LightGray);
     }
 
-    auto titleLines = renderer.wrappedText(UI_12_FONT_ID, book.title.c_str(), textWidth, 3, EpdFontFamily::BOLD);
+    const bool showReadingStats = book.hasBookProgress;
+    auto titleLines =
+        renderer.wrappedText(UI_12_FONT_ID, book.title.c_str(), textWidth, showReadingStats ? 2 : 3,
+                             EpdFontFamily::BOLD);
 
     auto author = renderer.truncatedText(UI_10_FONT_ID, book.author.c_str(), textWidth);
     const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
     const int titleBlockHeight = titleLineHeight * static_cast<int>(titleLines.size());
     const int authorHeight = book.author.empty() ? 0 : (renderer.getLineHeight(UI_10_FONT_ID) * 3 / 2);
     const int totalBlockHeight = titleBlockHeight + authorHeight;
-    int titleY = tileY + tileHeight / 2 - totalBlockHeight / 2;
+    int titleY = showReadingStats ? tileY + hPaddingInSelection + 4 : tileY + tileHeight / 2 - totalBlockHeight / 2;
     const int textX = tileX + hPaddingInSelection + coverWidth + LyraMetrics::values.verticalSpacing;
     for (const auto& line : titleLines) {
       renderer.drawText(UI_12_FONT_ID, textX, titleY, line.c_str(), true, EpdFontFamily::BOLD);
@@ -492,6 +511,24 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     if (!book.author.empty()) {
       titleY += renderer.getLineHeight(UI_10_FONT_ID) / 2;
       renderer.drawText(UI_10_FONT_ID, textX, titleY, author.c_str(), true);
+      titleY += renderer.getLineHeight(UI_10_FONT_ID);
+    }
+
+    if (showReadingStats) {
+      titleY += 4;
+      drawHomeProgress(renderer, textX, titleY, textWidth, tr(STR_BOOK_PROGRESS), book.bookProgress);
+      titleY += renderer.getLineHeight(UI_10_FONT_ID) + homeProgressBarHeight + 6;
+
+      if (book.hasChapterProgress) {
+        drawHomeProgress(renderer, textX, titleY, textWidth, tr(STR_CHAPTER_PROGRESS), book.chapterProgress);
+        titleY += renderer.getLineHeight(UI_10_FONT_ID) + homeProgressBarHeight + 6;
+
+        renderer.drawText(UI_10_FONT_ID, textX, titleY, tr(STR_CURRENT_CHAPTER), true, EpdFontFamily::BOLD);
+        titleY += renderer.getLineHeight(UI_10_FONT_ID);
+        const char* chapterTitle = book.currentChapter.empty() ? tr(STR_UNNAMED) : book.currentChapter.c_str();
+        const auto truncatedChapter = renderer.truncatedText(UI_10_FONT_ID, chapterTitle, textWidth);
+        renderer.drawText(UI_10_FONT_ID, textX, titleY, truncatedChapter.c_str(), true);
+      }
     }
   } else {
     drawEmptyRecents(renderer, rect);
