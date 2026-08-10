@@ -5,6 +5,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 RECENT_BOOKS = ROOT / "src" / "RecentBooksStore.h"
 HOME = ROOT / "src" / "activities" / "home" / "HomeActivity.cpp"
+RECENT_BOOKS_ACTIVITY = ROOT / "src" / "activities" / "home" / "RecentBooksActivity.cpp"
+READING_PROGRESS = ROOT / "src" / "RecentBookProgress.cpp"
 LYRA = ROOT / "src" / "components" / "themes" / "lyra" / "LyraTheme.cpp"
 ENGLISH = ROOT / "lib" / "I18n" / "translations" / "english.yaml"
 KOREAN = ROOT / "lib" / "I18n" / "translations" / "korean.yaml"
@@ -24,13 +26,17 @@ def main() -> int:
             "uint8_t chapterProgress = 0;",
             "std::string currentChapter;",
         ),
-        HOME: (
+        READING_PROGRESS: (
             "void loadEpubProgress(RecentBook& book)",
             "void loadXtcProgress(RecentBook& book)",
             "void loadTxtProgress(RecentBook& book)",
-            "loadReadingProgress(recentBooks.back());",
             '"/progress.bin"',
             '"/index.bin"',
+        ),
+        HOME: ("RecentBookProgress::load(recentBooks.back());",),
+        RECENT_BOOKS_ACTIVITY: (
+            "RecentBookProgress::load(recentBooks.back());",
+            'std::to_string(book.bookProgress) + "%"',
         ),
         LYRA: (
             "void drawHomeProgress(",
@@ -61,7 +67,7 @@ def main() -> int:
         print("\n".join(failures), file=sys.stderr)
         return 1
 
-    print("확인 완료: 홈 독서 진행률 데이터·UI·번역 연결")
+    print("확인 완료: 홈·최근 도서 진행률 데이터·UI·번역 연결")
     return 0
 
 

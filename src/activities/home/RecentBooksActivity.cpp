@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "MappedInputManager.h"
+#include "RecentBookProgress.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -26,6 +27,7 @@ void RecentBooksActivity::loadRecentBooks() {
       continue;
     }
     recentBooks.push_back(book);
+    RecentBookProgress::load(recentBooks.back());
   }
 }
 
@@ -100,8 +102,13 @@ void RecentBooksActivity::render(RenderLock&&) {
   } else {
     GUI.drawList(
         renderer, Rect{0, contentTop, pageWidth, contentHeight}, recentBooks.size(), selectorIndex,
-        [this](int index) { return recentBooks[index].title; }, [this](int index) { return recentBooks[index].author; },
-        [this](int index) { return UITheme::getFileIcon(recentBooks[index].path); });
+        [this](int index) { return recentBooks[index].title; },
+        [this](int index) { return recentBooks[index].author; },
+        [this](int index) { return UITheme::getFileIcon(recentBooks[index].path); },
+        [this](int index) {
+          const RecentBook& book = recentBooks[index];
+          return book.hasBookProgress ? std::to_string(book.bookProgress) + "%" : std::string();
+        });
   }
 
   // Help text

@@ -9,7 +9,7 @@ struct RecentBook {
   std::string author;
   std::string coverBmpPath;
 
-  // 홈 화면에서만 사용하는 임시 진행 정보입니다. 최근 도서 JSON에는 저장하지 않습니다.
+  // 홈과 최근 도서 화면에서만 사용하는 임시 진행 정보입니다. 최근 도서 JSON에는 저장하지 않습니다.
   bool hasBookProgress = false;
   uint8_t bookProgress = 0;
   bool hasChapterProgress = false;
