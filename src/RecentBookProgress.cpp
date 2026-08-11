@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <string>
 
+#include "BookDataStore.h"
 #include "RecentBooksStore.h"
 
 namespace {
@@ -43,8 +44,8 @@ bool readProgressFile(const std::string& path, uint8_t* data, const size_t capac
   return true;
 }
 
-void loadEpubProgress(RecentBook& book) {
-  Epub epub(book.path, "/.crosspoint");
+void loadEpubProgress(RecentBook& book, const BookDataReference& bookData) {
+  Epub epub(book.path, "/.crosspoint", bookData.cacheKey);
   // 최근 도서 화면에서는 이미 만들어진 메타데이터 캐시만 읽고 EPUB을 다시 인덱싱하지 않습니다.
   if (!epub.load(false, true) || epub.getSpineItemsCount() <= 0) {
     return;
@@ -83,8 +84,8 @@ void loadEpubProgress(RecentBook& book) {
   }
 }
 
-void loadXtcProgress(RecentBook& book) {
-  Xtc xtc(book.path, "/.crosspoint");
+void loadXtcProgress(RecentBook& book, const BookDataReference& bookData) {
+  Xtc xtc(book.path, "/.crosspoint", bookData.cacheKey);
   if (!xtc.load() || xtc.getPageCount() == 0) {
     return;
   }
@@ -117,8 +118,8 @@ void loadXtcProgress(RecentBook& book) {
   }
 }
 
-void loadTxtProgress(RecentBook& book) {
-  Txt txt(book.path, "/.crosspoint");
+void loadTxtProgress(RecentBook& book, const BookDataReference& bookData) {
+  Txt txt(book.path, "/.crosspoint", bookData.cacheKey);
   if (!txt.load()) {
     return;
   }
@@ -155,12 +156,13 @@ void RecentBookProgress::load(RecentBook& book) {
   book.hasChapterProgress = false;
   book.chapterProgress = 0;
   book.currentChapter.clear();
+  const BookDataReference bookData = BookDataStore::resolve(book.path);
 
   if (FsHelpers::hasEpubExtension(book.path)) {
-    loadEpubProgress(book);
+    loadEpubProgress(book, bookData);
   } else if (FsHelpers::hasXtcExtension(book.path)) {
-    loadXtcProgress(book);
+    loadXtcProgress(book, bookData);
   } else if (FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path)) {
-    loadTxtProgress(book);
+    loadTxtProgress(book, bookData);
   }
 }

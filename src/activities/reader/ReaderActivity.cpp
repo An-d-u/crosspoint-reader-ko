@@ -3,6 +3,8 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 
+#include "BookDataStore.h"
+#include "BookmarkStore.h"
 #include "CrossPointSettings.h"
 #include "Epub.h"
 #include "EpubReaderActivity.h"
@@ -10,8 +12,16 @@
 #include "TxtReaderActivity.h"
 #include "Xtc.h"
 #include "XtcReaderActivity.h"
+#include "RecentBooksStore.h"
 #include "activities/util/BmpViewerActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
+
+namespace {
+void migrateBookmarks(const std::string& path) {
+  BookmarkStore store(path);
+  store.load();
+}
+}  // namespace
 
 bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasXtcExtension(path); }
 
@@ -22,13 +32,13 @@ bool ReaderActivity::isTxtFile(const std::string& path) {
 
 bool ReaderActivity::isBmpFile(const std::string& path) { return FsHelpers::hasBmpExtension(path); }
 
-std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
+std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path, const std::string& cacheKey) {
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
     return nullptr;
   }
 
-  auto epub = std::unique_ptr<Epub>(new Epub(path, "/.crosspoint"));
+  auto epub = std::unique_ptr<Epub>(new Epub(path, "/.crosspoint", cacheKey));
   if (epub->load(true, SETTINGS.embeddedStyle == 0)) {
     return epub;
   }
@@ -37,13 +47,13 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   return nullptr;
 }
 
-std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path) {
+std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path, const std::string& cacheKey) {
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
     return nullptr;
   }
 
-  auto xtc = std::unique_ptr<Xtc>(new Xtc(path, "/.crosspoint"));
+  auto xtc = std::unique_ptr<Xtc>(new Xtc(path, "/.crosspoint", cacheKey));
   if (xtc->load()) {
     return xtc;
   }
@@ -52,13 +62,13 @@ std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path) {
   return nullptr;
 }
 
-std::unique_ptr<Txt> ReaderActivity::loadTxt(const std::string& path) {
+std::unique_ptr<Txt> ReaderActivity::loadTxt(const std::string& path, const std::string& cacheKey) {
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
     return nullptr;
   }
 
-  auto txt = std::unique_ptr<Txt>(new Txt(path, "/.crosspoint"));
+  auto txt = std::unique_ptr<Txt>(new Txt(path, "/.crosspoint", cacheKey));
   if (txt->load()) {
     return txt;
   }
@@ -107,25 +117,34 @@ void ReaderActivity::onEnter() {
   if (isBmpFile(initialBookPath)) {
     onGoToBmpViewer(initialBookPath);
   } else if (isXtcFile(initialBookPath)) {
-    auto xtc = loadXtc(initialBookPath);
+    const BookDataReference bookData = BookDataStore::resolve(initialBookPath);
+    auto xtc = loadXtc(initialBookPath, bookData.cacheKey);
     if (!xtc) {
       onGoBack();
       return;
     }
+    migrateBookmarks(initialBookPath);
+    RECENT_BOOKS.relocateBook(bookData.previousPath, initialBookPath);
     onGoToXtcReader(std::move(xtc));
   } else if (isTxtFile(initialBookPath)) {
-    auto txt = loadTxt(initialBookPath);
+    const BookDataReference bookData = BookDataStore::resolve(initialBookPath);
+    auto txt = loadTxt(initialBookPath, bookData.cacheKey);
     if (!txt) {
       onGoBack();
       return;
     }
+    migrateBookmarks(initialBookPath);
+    RECENT_BOOKS.relocateBook(bookData.previousPath, initialBookPath);
     onGoToTxtReader(std::move(txt));
   } else {
-    auto epub = loadEpub(initialBookPath);
+    const BookDataReference bookData = BookDataStore::resolve(initialBookPath);
+    auto epub = loadEpub(initialBookPath, bookData.cacheKey);
     if (!epub) {
       onGoBack();
       return;
     }
+    migrateBookmarks(initialBookPath);
+    RECENT_BOOKS.relocateBook(bookData.previousPath, initialBookPath);
     onGoToEpubReader(std::move(epub));
   }
 }

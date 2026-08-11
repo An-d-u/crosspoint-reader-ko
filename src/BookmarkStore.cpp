@@ -8,8 +8,11 @@
 #include <cmath>
 #include <utility>
 
+#include "BookDataStore.h"
+
 namespace {
-constexpr int bookmarkFileVersion = 1;
+constexpr int bookmarkFileVersion = 2;
+constexpr int legacyBookmarkFileVersion = 1;
 constexpr char bookmarkDirectory[] = "/.crosspoint/bookmarks";
 constexpr size_t maxChapterLength = 256;
 
@@ -21,19 +24,49 @@ uint64_t stablePathHash(const std::string& path) {
   }
   return hash;
 }
+
+std::string legacyBookmarkPath(const std::string& path) {
+  return std::string(bookmarkDirectory) + "/book_" + std::to_string(stablePathHash(path)) + ".json";
+}
 }  // namespace
 
 BookmarkStore::BookmarkStore(std::string bookPath) : bookPath(std::move(bookPath)) {
-  storagePath = std::string(bookmarkDirectory) + "/book_" + std::to_string(stablePathHash(this->bookPath)) + ".json";
+  const BookDataReference bookData = BookDataStore::resolve(this->bookPath);
+  bookId = bookData.id;
+  knownPaths = bookData.knownPaths;
+  storagePath = bookId.empty() ? legacyBookmarkPath(this->bookPath)
+                               : std::string(bookmarkDirectory) + "/book_id_" + bookId + ".json";
 }
 
 bool BookmarkStore::load() {
   bookmarks.clear();
-  if (!Storage.exists(storagePath.c_str())) {
+  if (Storage.exists(storagePath.c_str())) {
+    return loadFromFile(storagePath);
+  }
+
+  if (bookId.empty()) {
     return true;
   }
 
-  const String json = Storage.readFile(storagePath.c_str());
+  if (std::find(knownPaths.begin(), knownPaths.end(), bookPath) == knownPaths.end()) {
+    knownPaths.push_back(bookPath);
+  }
+  for (const std::string& path : knownPaths) {
+    const std::string legacyPath = legacyBookmarkPath(path);
+    if (!Storage.exists(legacyPath.c_str())) {
+      continue;
+    }
+    if (!loadFromFile(legacyPath, path)) {
+      continue;
+    }
+    // 기존 파일은 롤백을 위해 남겨두고 내용 지문 기반 파일을 새로 저장합니다.
+    return save();
+  }
+  return true;
+}
+
+bool BookmarkStore::loadFromFile(const std::string& path, const std::string& legacyBookPath) {
+  const String json = Storage.readFile(path.c_str());
   if (json.isEmpty()) {
     return false;
   }
@@ -45,16 +78,23 @@ bool BookmarkStore::load() {
     return false;
   }
 
-  if ((document["version"] | 0) != bookmarkFileVersion ||
-      (document["bookPath"] | std::string()) != bookPath) {
+  const int version = document["version"] | 0;
+  const bool validLegacy = !legacyBookPath.empty() && version == legacyBookmarkFileVersion &&
+                           (document["bookPath"] | std::string()) == legacyBookPath;
+  const bool validCurrent = legacyBookPath.empty() && version == bookmarkFileVersion && !bookId.empty() &&
+                            (document["bookId"] | std::string()) == bookId;
+  const bool validPathFallback = legacyBookPath.empty() && bookId.empty() && version == legacyBookmarkFileVersion &&
+                                 (document["bookPath"] | std::string()) == bookPath;
+  if (!validLegacy && !validCurrent && !validPathFallback) {
     LOG_ERR("BMK", "Bookmark file identity mismatch");
     return false;
   }
 
   const JsonArrayConst items = document["bookmarks"].as<JsonArrayConst>();
-  bookmarks.reserve(std::min(items.size(), maxBookmarks));
+  std::vector<Bookmark> loadedBookmarks;
+  loadedBookmarks.reserve(std::min(items.size(), maxBookmarks));
   for (const JsonObjectConst item : items) {
-    if (bookmarks.size() >= maxBookmarks) {
+    if (loadedBookmarks.size() >= maxBookmarks) {
       break;
     }
 
@@ -71,9 +111,10 @@ bool BookmarkStore::load() {
     if (bookmark.chapter.size() > maxChapterLength) {
       bookmark.chapter.resize(maxChapterLength);
     }
-    bookmarks.push_back(std::move(bookmark));
+    loadedBookmarks.push_back(std::move(bookmark));
   }
 
+  bookmarks = std::move(loadedBookmarks);
   return true;
 }
 
@@ -82,8 +123,11 @@ bool BookmarkStore::save() const {
   Storage.mkdir(bookmarkDirectory);
 
   JsonDocument document;
-  document["version"] = bookmarkFileVersion;
+  document["version"] = bookId.empty() ? legacyBookmarkFileVersion : bookmarkFileVersion;
   document["bookPath"] = bookPath;
+  if (!bookId.empty()) {
+    document["bookId"] = bookId;
+  }
   JsonArray items = document["bookmarks"].to<JsonArray>();
 
   for (const Bookmark& bookmark : bookmarks) {

@@ -24,7 +24,10 @@ def main() -> int:
         STORE: (
             'constexpr char bookmarkDirectory[] = "/.crosspoint/bookmarks";',
             "uint64_t stablePathHash(const std::string& path)",
-            'document["version"] = bookmarkFileVersion;',
+            '"/book_id_" + bookId + ".json"',
+            "BookDataStore::resolve(this->bookPath)",
+            "loadFromFile(legacyPath, path)",
+            'document["bookId"] = bookId;',
             'document["bookPath"] = bookPath;',
             'document["bookmarks"].to<JsonArray>()',
             "BookmarkStore::ToggleResult BookmarkStore::toggle",

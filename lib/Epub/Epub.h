@@ -38,9 +38,11 @@ class Epub {
   void discoverCssFilesFromZip();
 
  public:
-  explicit Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
-    // create a cache key based on the filepath
-    cachePath = cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(this->filepath));
+  explicit Epub(std::string filepath, const std::string& cacheDir, const std::string& cacheKey = "")
+      : filepath(std::move(filepath)) {
+    const std::string key =
+        cacheKey.empty() ? std::to_string(std::hash<std::string>{}(this->filepath)) : cacheKey;
+    cachePath = cacheDir + "/epub_" + key;
   }
   ~Epub() = default;
   std::string& getBasePath() { return contentBasePath; }

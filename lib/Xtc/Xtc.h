@@ -27,9 +27,11 @@ class Xtc {
   bool loaded;
 
  public:
-  explicit Xtc(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)), loaded(false) {
-    // Create cache key based on filepath (same as Epub)
-    cachePath = cacheDir + "/xtc_" + std::to_string(std::hash<std::string>{}(this->filepath));
+  explicit Xtc(std::string filepath, const std::string& cacheDir, const std::string& cacheKey = "")
+      : filepath(std::move(filepath)), loaded(false) {
+    const std::string key =
+        cacheKey.empty() ? std::to_string(std::hash<std::string>{}(this->filepath)) : cacheKey;
+    cachePath = cacheDir + "/xtc_" + key;
   }
   ~Xtc() = default;
 

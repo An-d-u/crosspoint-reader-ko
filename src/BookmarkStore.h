@@ -30,9 +30,12 @@ class BookmarkStore {
   static constexpr size_t maxBookmarks = 50;
 
   std::string bookPath;
+  std::string bookId;
   std::string storagePath;
+  std::vector<std::string> knownPaths;
   std::vector<Bookmark> bookmarks;
 
+  bool loadFromFile(const std::string& path, const std::string& legacyBookPath = {});
   bool save() const;
   static bool isSamePosition(const Bookmark& left, const Bookmark& right);
 };

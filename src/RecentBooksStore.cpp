@@ -9,6 +9,9 @@
 #include <Xtc.h>
 
 #include <algorithm>
+#include <iterator>
+
+#include "BookDataStore.h"
 
 namespace {
 constexpr uint8_t RECENT_BOOKS_FILE_VERSION = 3;
@@ -53,6 +56,36 @@ void RecentBooksStore::updateBook(const std::string& path, const std::string& ti
   }
 }
 
+bool RecentBooksStore::relocateBook(const std::string& oldPath, const std::string& newPath) {
+  if (oldPath.empty() || newPath.empty() || oldPath == newPath) {
+    return false;
+  }
+
+  auto oldBook = std::find_if(recentBooks.begin(), recentBooks.end(),
+                              [&](const RecentBook& book) { return book.path == oldPath; });
+  if (oldBook == recentBooks.end()) {
+    return false;
+  }
+
+  const size_t oldIndex = static_cast<size_t>(std::distance(recentBooks.begin(), oldBook));
+  RecentBook relocated = *oldBook;
+  relocated.path = newPath;
+  recentBooks.erase(std::remove_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) {
+                      return book.path == oldPath || book.path == newPath;
+                    }),
+                    recentBooks.end());
+  recentBooks.insert(recentBooks.begin() + std::min(oldIndex, recentBooks.size()), std::move(relocated));
+  return saveToFile();
+}
+
+void RecentBooksStore::registerExistingBooks() const {
+  for (const RecentBook& book : recentBooks) {
+    if (Storage.exists(book.path.c_str())) {
+      BookDataStore::resolve(book.path);
+    }
+  }
+}
+
 bool RecentBooksStore::saveToFile() const {
   Storage.mkdir("/.crosspoint");
   return JsonSettingsIO::saveRecentBooks(*this, RECENT_BOOKS_FILE_JSON);
@@ -71,12 +104,14 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   // Use buildIfMissing=false to avoid heavy epub loading on boot; getTitle()/getAuthor() may be
   // blank until the book is opened, and entries with missing title are omitted from recent list.
   if (FsHelpers::hasEpubExtension(lastBookFileName)) {
-    Epub epub(path, "/.crosspoint");
+    const BookDataReference bookData = BookDataStore::resolve(path);
+    Epub epub(path, "/.crosspoint", bookData.cacheKey);
     epub.load(false, true);
     return RecentBook{path, epub.getTitle(), epub.getAuthor(), epub.getThumbBmpPath()};
   } else if (FsHelpers::hasXtcExtension(lastBookFileName)) {
     // Handle XTC file
-    Xtc xtc(path, "/.crosspoint");
+    const BookDataReference bookData = BookDataStore::resolve(path);
+    Xtc xtc(path, "/.crosspoint", bookData.cacheKey);
     if (xtc.load()) {
       return RecentBook{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
     }
@@ -91,7 +126,11 @@ bool RecentBooksStore::loadFromFile() {
   if (Storage.exists(RECENT_BOOKS_FILE_JSON)) {
     String json = Storage.readFile(RECENT_BOOKS_FILE_JSON);
     if (!json.isEmpty()) {
-      return JsonSettingsIO::loadRecentBooks(*this, json.c_str());
+      const bool loaded = JsonSettingsIO::loadRecentBooks(*this, json.c_str());
+      if (loaded) {
+        registerExistingBooks();
+      }
+      return loaded;
     }
   }
 
@@ -101,6 +140,7 @@ bool RecentBooksStore::loadFromFile() {
       saveToFile();
       Storage.rename(RECENT_BOOKS_FILE_BIN, RECENT_BOOKS_FILE_BAK);
       LOG_DBG("RBS", "Migrated recent.bin to recent.json");
+      registerExistingBooks();
       return true;
     }
   }

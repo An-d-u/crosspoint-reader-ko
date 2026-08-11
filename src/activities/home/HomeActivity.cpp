@@ -13,6 +13,7 @@
 #include <cstring>
 #include <vector>
 
+#include "BookDataStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
@@ -65,17 +66,17 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
   int progress = 0;
   for (RecentBook& book : recentBooks) {
+    const BookDataReference bookData = BookDataStore::resolve(book.path);
     // Recovery for devices whose recent_books.json was written by an earlier
     // firmware that cleared coverBmpPath on XTC thumb-gen OOM (before the
     // sleep-validation fix stopped deleting 1-bit thumbs on every sleep).
     // Rebuild the cache-path template from the book's extension so the
     // normal generation path below gets another chance.
     if (book.coverBmpPath.empty() && !book.path.empty()) {
-      const auto h = std::to_string(std::hash<std::string>{}(book.path));
       if (FsHelpers::hasXtcExtension(book.path)) {
-        book.coverBmpPath = "/.crosspoint/xtc_" + h + "/thumb_[HEIGHT].bmp";
+        book.coverBmpPath = "/.crosspoint/xtc_" + bookData.cacheKey + "/thumb_[HEIGHT].bmp";
       } else if (FsHelpers::hasEpubExtension(book.path)) {
-        book.coverBmpPath = "/.crosspoint/epub_" + h + "/thumb_[HEIGHT].bmp";
+        book.coverBmpPath = "/.crosspoint/epub_" + bookData.cacheKey + "/thumb_[HEIGHT].bmp";
       }
     }
 
@@ -84,7 +85,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       if (!Storage.exists(coverPath.c_str())) {
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
-          Epub epub(book.path, "/.crosspoint");
+          Epub epub(book.path, "/.crosspoint", bookData.cacheKey);
           // Skip loading css since we only need metadata here
           epub.load(false, true);
 
@@ -99,7 +100,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           requestUpdate();
         } else if (FsHelpers::hasXtcExtension(book.path)) {
           // Handle XTC file
-          Xtc xtc(book.path, "/.crosspoint");
+          Xtc xtc(book.path, "/.crosspoint", bookData.cacheKey);
           if (xtc.load()) {
             // Try to generate thumbnail image for Continue Reading card
             if (!showingLoading) {

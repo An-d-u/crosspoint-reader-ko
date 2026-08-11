@@ -13,7 +13,7 @@ class Txt {
   size_t fileSize = 0;
 
  public:
-  explicit Txt(std::string path, std::string cacheBasePath);
+  explicit Txt(std::string path, std::string cacheBasePath, const std::string& cacheKey = "");
 
   bool load();
   [[nodiscard]] const std::string& getPath() const { return filepath; }

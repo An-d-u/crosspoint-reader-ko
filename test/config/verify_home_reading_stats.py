@@ -27,9 +27,10 @@ def main() -> int:
             "std::string currentChapter;",
         ),
         READING_PROGRESS: (
-            "void loadEpubProgress(RecentBook& book)",
-            "void loadXtcProgress(RecentBook& book)",
-            "void loadTxtProgress(RecentBook& book)",
+            "void loadEpubProgress(RecentBook& book, const BookDataReference& bookData)",
+            "void loadXtcProgress(RecentBook& book, const BookDataReference& bookData)",
+            "void loadTxtProgress(RecentBook& book, const BookDataReference& bookData)",
+            "BookDataStore::resolve(book.path)",
             '"/progress.bin"',
             '"/index.bin"',
         ),

@@ -151,6 +151,8 @@ cache. This cache directory exists at `.crosspoint` on the SD card. The structur
 
 ```
 .crosspoint/
+├── book-data.json       # 도서 내용 지문과 현재·과거 경로 및 캐시 키 연결
+├── bookmarks/           # 캐시 삭제와 분리해 보존하는 도서별 북마크
 ├── epub_12471232/       # Each EPUB is cached to a subdirectory named `epub_<hash>`
 │   ├── progress.bin     # Stores reading progress (chapter, page, etc.)
 │   ├── cover.bmp        # Book cover image (once generated)
@@ -163,10 +165,11 @@ cache. This cache directory exists at `.crosspoint` on the SD card. The structur
 └── epub_189013891/
 ```
 
-Deleting the `.crosspoint` directory will clear the entire cache. 
+설정 화면의 캐시 삭제 기능은 도서 캐시만 정리하고 북마크는 유지합니다. SD 카드에서 `.crosspoint` 디렉터리 전체를
+직접 삭제하면 캐시뿐 아니라 북마크와 도서 ID 레지스트리도 함께 삭제됩니다.
 
-Due the way it's currently implemented, the cache is not automatically cleared when a book is deleted and moving a book
-file will use a new cache directory, resetting the reading progress.
+도서 파일은 내용 지문으로 식별하므로 파일 이름을 바꾸거나 다른 폴더로 이동해도 기존 진행률과 북마크를 다시
+사용합니다. 기존 경로 기반 캐시는 레지스트리를 통해 그대로 연결하며 다시 생성하거나 이동하지 않습니다.
 
 For more details on the internal file structures, see the [file formats document](./docs/file-formats.md).
 

@@ -9,6 +9,7 @@
 #include <Txt.h>
 #include <Xtc.h>
 
+#include "BookDataStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "activities/reader/ReaderUtils.h"
@@ -241,11 +242,12 @@ void SleepActivity::renderCoverSleepScreen() const {
 
   std::string coverBmpPath;
   bool cropped = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
+  const BookDataReference bookData = BookDataStore::resolve(APP_STATE.openEpubPath);
 
   // Check if the current book is XTC, TXT, or EPUB
   if (FsHelpers::hasXtcExtension(APP_STATE.openEpubPath)) {
     // Handle XTC file
-    Xtc lastXtc(APP_STATE.openEpubPath, "/.crosspoint");
+    Xtc lastXtc(APP_STATE.openEpubPath, "/.crosspoint", bookData.cacheKey);
     if (!lastXtc.load()) {
       LOG_ERR("SLP", "Failed to load last XTC");
       return (this->*renderNoCoverSleepScreen)();
@@ -259,7 +261,7 @@ void SleepActivity::renderCoverSleepScreen() const {
     coverBmpPath = lastXtc.getCoverBmpPath();
   } else if (FsHelpers::hasTxtExtension(APP_STATE.openEpubPath)) {
     // Handle TXT file - looks for cover image in the same folder
-    Txt lastTxt(APP_STATE.openEpubPath, "/.crosspoint");
+    Txt lastTxt(APP_STATE.openEpubPath, "/.crosspoint", bookData.cacheKey);
     if (!lastTxt.load()) {
       LOG_ERR("SLP", "Failed to load last TXT");
       return (this->*renderNoCoverSleepScreen)();
@@ -274,7 +276,7 @@ void SleepActivity::renderCoverSleepScreen() const {
   } else if (FsHelpers::hasEpubExtension(APP_STATE.openEpubPath)) {
     // Handle EPUB file
     LOG_DBG("SLP", "Loading epub for cover: %s (free heap: %d)", APP_STATE.openEpubPath.c_str(), ESP.getFreeHeap());
-    Epub lastEpub(APP_STATE.openEpubPath, "/.crosspoint");
+    Epub lastEpub(APP_STATE.openEpubPath, "/.crosspoint", bookData.cacheKey);
     // Skip loading css since we only need metadata here
     if (!lastEpub.load(true, true)) {
       LOG_ERR("SLP", "Failed to load last epub");

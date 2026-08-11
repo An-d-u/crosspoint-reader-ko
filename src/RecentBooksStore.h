@@ -44,6 +44,7 @@ class RecentBooksStore {
 
   void updateBook(const std::string& path, const std::string& title, const std::string& author,
                   const std::string& coverBmpPath);
+  bool relocateBook(const std::string& oldPath, const std::string& newPath);
 
   // Get the list of recent books (most recent first)
   const std::vector<RecentBook>& getBooks() const { return recentBooks; }
@@ -57,6 +58,7 @@ class RecentBooksStore {
   RecentBook getDataFromBook(std::string path) const;
 
  private:
+  void registerExistingBooks() const;
   bool loadFromBinaryFile();
 };
 
