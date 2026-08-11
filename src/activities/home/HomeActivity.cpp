@@ -23,7 +23,7 @@
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 3;  // File Browser, Recents, Settings
+  int count = 4;  // 파일 탐색, 최근 도서, 학습, 설정
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -215,6 +215,7 @@ void HomeActivity::loop() {
 #if CROSSPOINT_ENABLE_WEB_TRANSFER
     const int fileTransferIdx = idx++;
 #endif
+    const int studyIdx = idx++;
     const int settingsIdx = idx;
 
     if (selectorIndex < recentBooks.size()) {
@@ -231,6 +232,8 @@ void HomeActivity::loop() {
     } else if (menuSelectedIndex == fileTransferIdx) {
       onFileTransferOpen();
 #endif
+    } else if (menuSelectedIndex == studyIdx) {
+      onStudyOpen();
     } else if (menuSelectedIndex == settingsIdx) {
       onSettingsOpen();
     }
@@ -252,8 +255,9 @@ void HomeActivity::render(RenderLock&&) {
                           std::bind(&HomeActivity::storeCoverBuffer, this));
 
   // Build menu items dynamically
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Recent, Settings};
+  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_STUDY_TITLE),
+                                        tr(STR_SETTINGS_TITLE)};
+  std::vector<UIIcon> menuIcons = {Folder, Recent, Book, Settings};
 
 #if CROSSPOINT_ENABLE_WEB_TRANSFER
   menuItems.insert(menuItems.begin() + 2, tr(STR_FILE_TRANSFER));
@@ -297,6 +301,8 @@ void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
 void HomeActivity::onRecentsOpen() { activityManager.goToRecentBooks(); }
 
 void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
+
+void HomeActivity::onStudyOpen() { activityManager.goToStudy(); }
 
 void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 

@@ -16,6 +16,7 @@
 #endif
 #include "reader/ReaderActivity.h"
 #include "settings/SettingsActivity.h"
+#include "study/StudyActivity.h"
 #include "util/FullScreenMessageActivity.h"
 
 void ActivityManager::begin() {
@@ -185,6 +186,8 @@ void ActivityManager::goToFileBrowser(std::string path) {
 void ActivityManager::goToRecentBooks() {
   replaceActivity(std::make_unique<RecentBooksActivity>(renderer, mappedInput));
 }
+
+void ActivityManager::goToStudy() { replaceActivity(std::make_unique<StudyActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToBrowser() {
 #if CROSSPOINT_ENABLE_OPDS

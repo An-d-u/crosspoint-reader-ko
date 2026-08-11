@@ -6,8 +6,12 @@
 #include <Logging.h>
 #include <WiFi.h>
 
+#include <cstdlib>
+#include <sys/time.h>
+
 namespace {
 constexpr const char* BOOKS_DIR = "/books";
+constexpr int64_t kMinimumStudyEpoch = 1704067200;
 
 const char INDEX_HTML[] PROGMEM = R"HTML(
 <!doctype html>
@@ -57,6 +61,13 @@ const char INDEX_HTML[] PROGMEM = R"HTML(
     const list = document.getElementById('progressList');
     const dropZone = document.getElementById('dropZone');
     let dragDepth = 0;
+
+    // 브라우저의 현재 시각을 받아 오프라인 학습 스케줄의 날짜 기준을 맞춘다.
+    fetch('/api/time', {
+      method: 'POST',
+      headers: {'Content-Type': 'text/plain'},
+      body: String(Math.floor(Date.now() / 1000))
+    }).catch(() => {});
 
     function openFilePicker(event) {
       if (!input.disabled && event.target !== input) input.click();
@@ -225,6 +236,7 @@ void CrossPointWebServer::begin() {
 
   server->on("/", HTTP_GET, [this] { handleRoot(); });
   server->on("/api/status", HTTP_GET, [this] { handleStatus(); });
+  server->on("/api/time", HTTP_POST, [this] { handleTime(); });
   server->on("/upload", HTTP_POST, [this] { handleUploadDone(); }, [this] { handleUpload(); });
   server->onNotFound([this] { handleNotFound(); });
   server->begin();
@@ -261,6 +273,23 @@ void CrossPointWebServer::handleClient() {
 void CrossPointWebServer::handleRoot() const { server->send_P(200, "text/html; charset=utf-8", INDEX_HTML); }
 
 void CrossPointWebServer::handleStatus() const { server->send(200, "application/json", "{\"ok\":true}"); }
+
+void CrossPointWebServer::handleTime() {
+  const String body = server->arg("plain");
+  char* end = nullptr;
+  const int64_t seconds = std::strtoll(body.c_str(), &end, 10);
+  if (end == body.c_str() || *end != '\0' || seconds < kMinimumStudyEpoch) {
+    server->send(400, "text/plain", "invalid epoch");
+    return;
+  }
+  const timeval value = {.tv_sec = static_cast<time_t>(seconds), .tv_usec = 0};
+  if (settimeofday(&value, nullptr) != 0) {
+    server->send(500, "text/plain", "time update failed");
+    return;
+  }
+  LOG_DBG("WEB", "Device time updated from browser");
+  server->send(204, "text/plain", "");
+}
 
 void CrossPointWebServer::handleUpload() {
   HTTPUpload& upload = server->upload();
