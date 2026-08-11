@@ -4,6 +4,8 @@
 #include <Epub/Page.h>
 #include <Epub/Section.h>
 
+#include <atomic>
+
 #include "BookmarkStore.h"
 #include "EpubReaderMenuActivity.h"
 #include "activities/Activity.h"
@@ -30,9 +32,23 @@ class EpubReaderActivity final : public Activity {
   bool pendingScreenshot = false;
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   bool automaticPageTurnActive = false;
-  int prefetchedSpineIndex = -1;
-  int prefetchedPageNumber = -1;
-  std::unique_ptr<Page> prefetchedPage = nullptr;
+
+  struct CachedPage {
+    int spineIndex = -1;
+    int pageNumber = -1;
+    uint32_t lastUsed = 0;
+    std::unique_ptr<Page> page;
+  };
+  static constexpr int PAGE_CACHE_SIZE = 3;
+  static constexpr uint32_t MIN_PAGE_PREFETCH_HEAP = 64 * 1024;
+  CachedPage pageCache[PAGE_CACHE_SIZE];
+  uint32_t pageCacheClock = 0;
+
+  std::atomic<bool> progressDirty{false};
+  int pendingProgressSpine = 0;
+  int pendingProgressPage = 0;
+  int pendingProgressPageCount = 0;
+  unsigned long progressQueuedAt = 0;
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
@@ -44,11 +60,13 @@ class EpubReaderActivity final : public Activity {
   SavedPosition savedPositions[MAX_FOOTNOTE_DEPTH] = {};
   int footnoteDepth = 0;
 
-  void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
-                      int orientedMarginBottom, int orientedMarginLeft);
+  void renderContents(const Page& page, int orientedMarginTop, int orientedMarginRight, int orientedMarginBottom,
+                      int orientedMarginLeft);
   void renderStatusBar() const;
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
-  void saveProgress(int spineIndex, int currentPage, int pageCount);
+  bool saveProgress(int spineIndex, int currentPage, int pageCount);
+  void queueProgressSave(int spineIndex, int currentPage, int pageCount);
+  void flushPendingProgress();
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   Bookmark getCurrentBookmark() const;
@@ -57,8 +75,9 @@ class EpubReaderActivity final : public Activity {
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void pageTurn(bool isForwardTurn);
-  void clearPrefetchedPage();
-  void prefetchNextPage();
+  void clearPageCache();
+  const Page* loadCachedPage(int pageNumber, bool markUsed);
+  void prefetchAdjacentPages();
 
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);

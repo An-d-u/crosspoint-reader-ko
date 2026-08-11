@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <functional>
 #include <memory>
 #include <optional>
@@ -18,6 +18,8 @@ class Section {
   FsFile file;
   std::vector<uint32_t> pagePositions;
   bool verticalWritingMode = false;
+
+  bool ensureSectionFileOpen();
 
   void writeSectionFileHeader(int fontId, float lineCompression, bool extraParagraphSpacing, bool paragraphIndent,
                                uint8_t paragraphAlignment, bool characterWrap, uint16_t viewportWidth,

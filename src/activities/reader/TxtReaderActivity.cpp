@@ -7,6 +7,7 @@
 #include <Logging.h>
 #include <Serialization.h>
 #include <Utf8.h>
+#include <esp_system.h>
 
 #include <algorithm>
 
@@ -22,6 +23,7 @@
 
 namespace {
 constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
+constexpr unsigned long PROGRESS_SAVE_DELAY_MS = 750;
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
 constexpr uint8_t CACHE_VERSION = 4;          // Increment when cache format changes (added lineCompression)
@@ -91,6 +93,62 @@ size_t findBreakPosition(const GfxRenderer& renderer, int fontId, const std::str
 }
 }  // namespace
 
+void TxtReaderActivity::clearPageCache() {
+  for (auto& cached : pageCache) {
+    cached.pageNumber = -1;
+    cached.lastUsed = 0;
+    cached.lines.clear();
+  }
+  pageCacheClock = 0;
+}
+
+const std::vector<std::string>* TxtReaderActivity::loadCachedPage(const int pageNumber, const bool markUsed) {
+  if (pageNumber < 0 || pageNumber >= totalPages || static_cast<size_t>(pageNumber) >= pageOffsets.size()) {
+    return nullptr;
+  }
+
+  for (auto& cached : pageCache) {
+    if (cached.pageNumber == pageNumber && !cached.lines.empty()) {
+      if (markUsed) cached.lastUsed = ++pageCacheClock;
+      return &cached.lines;
+    }
+  }
+
+  std::vector<std::string> lines;
+  size_t nextOffset = pageOffsets[pageNumber];
+  if (!loadPageAtOffset(pageOffsets[pageNumber], lines, nextOffset)) {
+    return nullptr;
+  }
+
+  CachedTextPage* target = &pageCache[0];
+  for (auto& cached : pageCache) {
+    if (cached.pageNumber < 0) {
+      target = &cached;
+      break;
+    }
+    if (cached.lastUsed < target->lastUsed) {
+      target = &cached;
+    }
+  }
+
+  target->pageNumber = pageNumber;
+  target->lastUsed = markUsed ? ++pageCacheClock : 0;
+  target->lines = std::move(lines);
+  return &target->lines;
+}
+
+void TxtReaderActivity::prefetchAdjacentPages() {
+  const int adjacentPages[] = {currentPage - 1, currentPage + 1};
+  for (const int pageNumber : adjacentPages) {
+    if (pageNumber < 0 || pageNumber >= totalPages) continue;
+    if (esp_get_free_heap_size() < MIN_PAGE_PREFETCH_HEAP) {
+      LOG_DBG("TRS", "Skipping page prefetch at %lu bytes free heap", esp_get_free_heap_size());
+      return;
+    }
+    loadCachedPage(pageNumber, false);
+  }
+}
+
 void TxtReaderActivity::onEnter() {
   Activity::onEnter();
 
@@ -119,8 +177,10 @@ void TxtReaderActivity::onExit() {
   // Reset orientation back to portrait for the rest of the UI
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
+  flushPendingProgress();
+  clearPageCache();
   pageOffsets.clear();
-  currentPageLines.clear();
+  readBuffer.clear();
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
   txt.reset();
@@ -183,6 +243,14 @@ void TxtReaderActivity::openReaderMenu() {
 }
 
 void TxtReaderActivity::loop() {
+  if (progressDirty.load(std::memory_order_acquire) && millis() - progressQueuedAt >= PROGRESS_SAVE_DELAY_MS &&
+      !RenderLock::peek()) {
+    RenderLock lock(*this);
+    if (progressDirty.load(std::memory_order_relaxed)) {
+      flushPendingProgress();
+    }
+  }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     openReaderMenu();
     return;
@@ -312,14 +380,10 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
 
   // Read a chunk from file
   size_t chunkSize = std::min(CHUNK_SIZE, fileSize - offset);
-  auto* buffer = static_cast<uint8_t*>(malloc(chunkSize + 1));
-  if (!buffer) {
-    LOG_ERR("TRS", "Failed to allocate %zu bytes", chunkSize);
-    return false;
-  }
+  readBuffer.resize(chunkSize + 1);
+  uint8_t* buffer = readBuffer.data();
 
   if (!txt->readContent(buffer, offset, chunkSize)) {
-    free(buffer);
     return false;
   }
   buffer[chunkSize] = '\0';
@@ -408,8 +472,6 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
     nextOffset = fileSize;
   }
 
-  free(buffer);
-
   return !outLines.empty();
 }
 
@@ -431,6 +493,7 @@ void TxtReaderActivity::render(RenderLock&&) {
         currentLineCompression != cachedLineCompression) {
       LOG_DBG("TRS", "Settings changed, reinitializing (font: %d->%d)", cachedFontId, currentFontId);
       initialized = false;
+      clearPageCache();
       pageOffsets.clear();
     }
   }
@@ -453,31 +516,32 @@ void TxtReaderActivity::render(RenderLock&&) {
 
   LOG_DBG("TRS", "Loading page %d content...", currentPage);
 
-  // Load current page content
-  size_t offset = pageOffsets[currentPage];
-  size_t nextOffset;
-  currentPageLines.clear();
-  loadPageAtOffset(offset, currentPageLines, nextOffset);
+  const std::vector<std::string>* pageLines = loadCachedPage(currentPage, true);
+  if (!pageLines) {
+    LOG_ERR("TRS", "Failed to load page %d", currentPage);
+    renderer.clearScreen();
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+    renderer.displayBuffer();
+    return;
+  }
 
-  LOG_DBG("TRS", "Page loaded, %d lines. Rendering...", currentPageLines.size());
+  LOG_DBG("TRS", "Page loaded, %d lines. Rendering...", pageLines->size());
 
   renderer.clearScreen();
-  renderPage();
+  renderPage(*pageLines);
+  prefetchAdjacentPages();
 
-  LOG_DBG("TRS", "Render complete, saving progress...");
-
-  // Save progress
-  saveProgress();
+  queueProgressSave(currentPage);
 }
 
-void TxtReaderActivity::renderPage() {
+void TxtReaderActivity::renderPage(const std::vector<std::string>& lines) {
   const int lineHeight = renderer.getLineHeight(cachedFontId) * cachedLineCompression;
   const int contentWidth = viewportWidth;
 
   // Render text lines with alignment
   auto renderLines = [&]() {
     int y = cachedOrientedMarginTop;
-    for (const auto& line : currentPageLines) {
+    for (const auto& line : lines) {
       if (!line.empty()) {
         int x = cachedOrientedMarginLeft;
 
@@ -536,15 +600,34 @@ void TxtReaderActivity::renderStatusBar() const {
   GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title);
 }
 
-void TxtReaderActivity::saveProgress() const {
+bool TxtReaderActivity::saveProgress(const int page) const {
+  if (!txt) return false;
+
   FsFile f;
   if (Storage.openFileForWrite("TRS", txt->getCachePath() + "/progress.bin", f)) {
     uint8_t data[4];
-    data[0] = currentPage & 0xFF;
-    data[1] = (currentPage >> 8) & 0xFF;
+    data[0] = page & 0xFF;
+    data[1] = (page >> 8) & 0xFF;
     data[2] = 0;
     data[3] = 0;
-    f.write(data, 4);
+    if (f.write(data, 4) == 4) return true;
+    LOG_ERR("TRS", "Failed to write progress for page %d", page);
+  } else {
+    LOG_ERR("TRS", "Failed to open progress file for page %d", page);
+  }
+  return false;
+}
+
+void TxtReaderActivity::queueProgressSave(const int page) {
+  pendingProgressPage = page;
+  progressQueuedAt = millis();
+  progressDirty.store(true, std::memory_order_release);
+}
+
+void TxtReaderActivity::flushPendingProgress() {
+  if (!progressDirty.load(std::memory_order_relaxed)) return;
+  if (saveProgress(pendingProgressPage)) {
+    progressDirty.store(false, std::memory_order_release);
   }
 }
 

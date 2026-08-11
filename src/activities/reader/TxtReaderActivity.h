@@ -2,6 +2,7 @@
 
 #include <Txt.h>
 
+#include <atomic>
 #include <vector>
 
 #include "BookmarkStore.h"
@@ -17,10 +18,24 @@ class TxtReaderActivity final : public Activity {
 
   // Streaming text reader - stores file offsets for each page
   std::vector<size_t> pageOffsets;  // File offset for start of each page
-  std::vector<std::string> currentPageLines;
+  std::vector<uint8_t> readBuffer;
   int linesPerPage = 0;
   int viewportWidth = 0;
   bool initialized = false;
+
+  struct CachedTextPage {
+    int pageNumber = -1;
+    uint32_t lastUsed = 0;
+    std::vector<std::string> lines;
+  };
+  static constexpr int PAGE_CACHE_SIZE = 3;
+  static constexpr uint32_t MIN_PAGE_PREFETCH_HEAP = 64 * 1024;
+  CachedTextPage pageCache[PAGE_CACHE_SIZE];
+  uint32_t pageCacheClock = 0;
+
+  std::atomic<bool> progressDirty{false};
+  int pendingProgressPage = 0;
+  unsigned long progressQueuedAt = 0;
 
   // Cached settings for cache validation (different fonts/margins require re-indexing)
   int cachedFontId = 0;
@@ -33,7 +48,7 @@ class TxtReaderActivity final : public Activity {
   int cachedOrientedMarginBottom = 0;
   int cachedOrientedMarginLeft = 0;
 
-  void renderPage();
+  void renderPage(const std::vector<std::string>& lines);
   void renderStatusBar() const;
 
   void initializeReader();
@@ -41,8 +56,13 @@ class TxtReaderActivity final : public Activity {
   void buildPageIndex();
   bool loadPageIndexCache();
   void savePageIndexCache() const;
-  void saveProgress() const;
+  bool saveProgress(int page) const;
+  void queueProgressSave(int page);
+  void flushPendingProgress();
   void loadProgress();
+  void clearPageCache();
+  const std::vector<std::string>* loadCachedPage(int pageNumber, bool markUsed);
+  void prefetchAdjacentPages();
   Bookmark getCurrentBookmark() const;
   void openReaderMenu();
   void openBookmarks();

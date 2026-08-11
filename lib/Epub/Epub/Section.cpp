@@ -75,6 +75,7 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
                               const uint16_t viewportWidth, const uint16_t viewportHeight,
                               const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering,
                               const bool respectEpubVerticalWriting) {
+  if (file.isOpen()) file.close();
   pagePositions.clear();
   verticalWritingMode = false;
 
@@ -176,8 +177,6 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
     }
   }
 
-  // Explicit close() required: member variable persists beyond function scope
-  file.close();
   if (cssParser) {
     cssParser->clear();
   }
@@ -185,8 +184,8 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
   return true;
 }
 
-// Your updated class method (assuming you are using the 'SD' object, which is a wrapper for a specific filesystem)
 bool Section::clearCache() {
+  if (file.isOpen()) file.close();
   pagePositions.clear();
   if (!Storage.exists(filePath.c_str())) {
     LOG_DBG("SCT", "Cache does not exist, no action needed");
@@ -207,6 +206,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                                 const uint16_t viewportWidth, const uint16_t viewportHeight,
                                 const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering,
                                 const bool respectEpubVerticalWriting, const std::function<void()>& popupFn) {
+  if (file.isOpen()) file.close();
   pagePositions.clear();
   verticalWritingMode = false;
   const auto localPath = epub->getSpineItem(spineIndex).href;
@@ -346,6 +346,13 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
 
 std::unique_ptr<Page> Section::loadPageFromSectionFile() { return loadPageFromSectionFile(currentPage); }
 
+bool Section::ensureSectionFileOpen() {
+  if (file.isOpen()) {
+    return true;
+  }
+  return Storage.openFileForRead("SCT", filePath, file);
+}
+
 std::unique_ptr<Page> Section::loadPageFromSectionFile(const int pageNumber) {
   if (pageNumber < 0 || pageNumber >= pageCount) {
     LOG_ERR("SCT", "Requested page %d out of bounds (max %d)", pageNumber, pageCount);
@@ -358,17 +365,14 @@ std::unique_ptr<Page> Section::loadPageFromSectionFile(const int pageNumber) {
     return nullptr;
   }
 
-  if (!Storage.openFileForRead("SCT", filePath, file)) {
+  if (!ensureSectionFileOpen()) {
     return nullptr;
   }
 
   const uint32_t pagePos = pagePositions[pageNumber];
   file.seek(pagePos);
 
-  auto page = Page::deserialize(file);
-  // Explicit close() required: member variable persists beyond function scope
-  file.close();
-  return page;
+  return Page::deserialize(file);
 }
 
 std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) const {

@@ -81,9 +81,8 @@ void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
 
   manager_->prewarmCache(manager_->scanFontId_, manager_->scanText_.c_str(), styleMask);
 
-  // Free scan string memory
+  // 다음 페이지에서도 같은 버퍼를 재사용해 반복 할당과 힙 단편화를 피한다.
   manager_->scanText_.clear();
-  manager_->scanText_.shrink_to_fit();
 }
 
 FontCacheManager::PrewarmScope::~PrewarmScope() {
