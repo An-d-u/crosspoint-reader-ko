@@ -25,7 +25,7 @@ class WifiCredentialStore {
   std::vector<WifiCredential> credentials;
   std::string lastConnectedSsid;
 
-  static constexpr size_t MAX_NETWORKS = 8;
+  static constexpr size_t MAX_NETWORKS = 16;
 
   // Private constructor for singleton
   WifiCredentialStore() = default;

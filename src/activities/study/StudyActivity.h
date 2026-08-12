@@ -20,9 +20,10 @@ class StudyActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  bool preventAutoSleep() override { return view_ == View::SyncingTime; }
 
  private:
-  enum class View : uint8_t { NoDeck, Deck, Question, Answer };
+  enum class View : uint8_t { NoDeck, SyncingTime, Deck, Question, Answer };
 
   struct PendingCard {
     int index = -1;
@@ -39,6 +40,9 @@ class StudyActivity final : public Activity {
   bool openDeck();
   void closeDeck();
   void switchDeck(int direction);
+  void openSelectedDeck();
+  void beginTimeSync();
+  void finishTimeSync();
   void prepareDeck();
   void buildQueue();
   bool takeNext();
@@ -83,6 +87,7 @@ class StudyActivity final : public Activity {
   int today_ = 0;
   int fallbackMinute_ = 720;
   unsigned long sessionStartedAt_ = 0;
+  unsigned long timeSyncStartedAt_ = 0;
   int dueCount_ = 0;
   int newCount_ = 0;
   int reviewedCount_ = 0;

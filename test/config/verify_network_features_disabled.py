@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AP 전용 단순 웹 파일 전송만 복구하고 나머지 네트워크 기능은 제외되었는지 검사한다.
+AP 웹 파일 전송과 저장형 Wi-Fi 시간 동기화만 활성화되었는지 검사한다.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def main() -> int:
     for required_flag in [
         "-DCROSSPOINT_ENABLE_NETWORK=1",
         "-DCROSSPOINT_ENABLE_WEB_TRANSFER=1",
-        "-DCROSSPOINT_ENABLE_WIFI_SETTINGS=0",
+        "-DCROSSPOINT_ENABLE_WIFI_SETTINGS=1",
         "-DCROSSPOINT_ENABLE_OPDS=0",
         "-DCROSSPOINT_ENABLE_CALIBRE=0",
         "-DCROSSPOINT_ENABLE_KOREADER_SYNC=0",
@@ -47,9 +47,7 @@ def main() -> int:
             failures.append(f"web transfer build should not exclude {forbidden_exclusion}")
 
     for excluded in [
-        "-<WifiCredentialStore.cpp>",
         "-<activities/network/NetworkModeSelectionActivity.cpp>",
-        "-<activities/network/WifiSelectionActivity.cpp>",
         "-<activities/network/CalibreConnectActivity.cpp>",
         "-<network/HttpDownloader.cpp>",
         "-<network/OtaUpdater.cpp>",
@@ -63,6 +61,13 @@ def main() -> int:
     ]:
         if excluded not in platformio:
             failures.append(f"platformio.ini should exclude {excluded} from src build")
+
+    for required_source in [
+        "-<WifiCredentialStore.cpp>",
+        "-<activities/network/WifiSelectionActivity.cpp>",
+    ]:
+        if required_source in platformio:
+            failures.append(f"study time sync should compile {required_source[2:-1]}")
 
     for ignored in [
         "KOReaderSync",
@@ -131,12 +136,12 @@ def main() -> int:
         failures.append("simple upload server should expose /upload")
 
     if failures:
-        print("FAIL: Web-transfer-only network config is incomplete.")
+        print("FAIL: AP web transfer and saved-WiFi time sync config is incomplete.")
         for failure in failures:
             print(f" - {failure}")
         return 1
 
-    print("PASS: Web-transfer-only network config is applied.")
+    print("PASS: AP web transfer and saved-WiFi time sync config is applied.")
     return 0
 
 

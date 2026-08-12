@@ -2,6 +2,9 @@
 
 #include <GfxRenderer.h>
 #include <Logging.h>
+#if CROSSPOINT_ENABLE_WIFI_SETTINGS
+#include <WiFi.h>
+#endif
 
 #include "ButtonRemapActivity.h"
 #if CROSSPOINT_ENABLE_OPDS
@@ -205,7 +208,12 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::Network:
 #if CROSSPOINT_ENABLE_WIFI_SETTINGS
-        startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false), resultHandler);
+        startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false),
+                               [this](const ActivityResult&) {
+                                 WiFi.disconnect(false);
+                                 WiFi.mode(WIFI_OFF);
+                                 SETTINGS.saveToFile();
+                               });
 #endif
         break;
       case SettingAction::ClearCache:

@@ -2,12 +2,15 @@
 
 #include <Arduino.h>
 #include <I18n.h>
+#include <WiFi.h>
+#include <esp_sntp.h>
 
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <string>
 
+#include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -15,6 +18,7 @@ namespace {
 constexpr const char* kStudyRoot = "/study";
 constexpr int64_t kReasonableEpoch = 1704067200;  // 2024-01-01
 constexpr int64_t kSecondsPerDay = 86400;
+constexpr unsigned long kTimeSyncTimeoutMs = 8000;
 
 const char* basenameOf(const char* path) {
   const char* slash = std::strrchr(path, '/');
@@ -54,7 +58,37 @@ StudyActivity::~StudyActivity() = default;
 
 void StudyActivity::onEnter() {
   Activity::onEnter();
-  if (findDecks() && openDeckAt(deckIndex_)) {
+  if (!findDecks()) {
+    view_ = View::NoDeck;
+    requestUpdate();
+    return;
+  }
+
+  if (static_cast<int64_t>(std::time(nullptr)) >= kReasonableEpoch) {
+    openSelectedDeck();
+    return;
+  }
+
+  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
+                         [this](const ActivityResult& result) {
+                           if (!result.isCancelled && WiFi.status() == WL_CONNECTED) {
+                             beginTimeSync();
+                           } else {
+                             finishTimeSync();
+                           }
+                         });
+}
+
+void StudyActivity::onExit() {
+  if (esp_sntp_enabled()) esp_sntp_stop();
+  WiFi.disconnect(false);
+  WiFi.mode(WIFI_OFF);
+  closeDeck();
+  Activity::onExit();
+}
+
+void StudyActivity::openSelectedDeck() {
+  if (openDeckAt(deckIndex_)) {
     prepareDeck();
     view_ = View::Deck;
   } else {
@@ -63,9 +97,21 @@ void StudyActivity::onEnter() {
   requestUpdate();
 }
 
-void StudyActivity::onExit() {
-  closeDeck();
-  Activity::onExit();
+void StudyActivity::beginTimeSync() {
+  if (esp_sntp_enabled()) esp_sntp_stop();
+  esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+  esp_sntp_setservername(0, "pool.ntp.org");
+  esp_sntp_init();
+  timeSyncStartedAt_ = millis();
+  view_ = View::SyncingTime;
+  requestUpdate(true);
+}
+
+void StudyActivity::finishTimeSync() {
+  if (esp_sntp_enabled()) esp_sntp_stop();
+  WiFi.disconnect(false);
+  WiFi.mode(WIFI_OFF);
+  openSelectedDeck();
 }
 
 bool StudyActivity::findDecks() {
@@ -351,6 +397,14 @@ void StudyActivity::grade(const study::Rating rating) {
 }
 
 void StudyActivity::loop() {
+  if (view_ == View::SyncingTime) {
+    const bool cancelled = mappedInput.wasReleased(MappedInputManager::Button::Back);
+    const bool clockUpdated = static_cast<int64_t>(std::time(nullptr)) >= kReasonableEpoch;
+    const bool timedOut = millis() - timeSyncStartedAt_ >= kTimeSyncTimeoutMs;
+    if (cancelled || clockUpdated || timedOut) finishTimeSync();
+    return;
+  }
+
   if (view_ == View::NoDeck) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) onGoHome();
     return;
@@ -486,6 +540,14 @@ void StudyActivity::render(RenderLock&&) {
     int y = metrics.topPadding + metrics.headerHeight + 45;
     y = drawWrapped(UI_12_FONT_ID, y, tr(STR_STUDY_NO_DECK), 2, true) + 20;
     drawWrapped(UI_10_FONT_ID, y, tr(STR_STUDY_INSTALL_HINT), 5);
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  } else if (view_ == View::SyncingTime) {
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
+                   tr(STR_STUDY_TITLE));
+    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_SYNCING_TIME), true,
+                              EpdFontFamily::BOLD);
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (view_ == View::Deck) {

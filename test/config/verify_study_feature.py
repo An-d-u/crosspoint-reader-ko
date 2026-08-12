@@ -19,6 +19,7 @@ def main() -> int:
     deck_h = (ROOT / "src/activities/study/StudyDeck.h").read_text(encoding="utf-8")
     deck_cpp = (ROOT / "src/activities/study/StudyDeck.cpp").read_text(encoding="utf-8")
     activity = (ROOT / "src/activities/study/StudyActivity.cpp").read_text(encoding="utf-8")
+    credential_store = (ROOT / "src/WifiCredentialStore.h").read_text(encoding="utf-8")
     scheduler = (ROOT / "src/activities/study/StudyScheduler.cpp").read_text(encoding="utf-8")
     home = (ROOT / "src/activities/home/HomeActivity.cpp").read_text(encoding="utf-8")
     manager = (ROOT / "src/activities/ActivityManager.cpp").read_text(encoding="utf-8")
@@ -37,6 +38,12 @@ def main() -> int:
     require(manager, "std::make_unique<StudyActivity>", "ActivityManager가 학습 화면을 만들지 않음")
     require(web, 'server->on("/api/time", HTTP_POST', "브라우저 시각 동기화 경로가 없음")
     require(web, "settimeofday", "기기 시각을 적용하지 않음")
+    require(credential_store, "MAX_NETWORKS = 16", "Wi-Fi 저장 한도가 16개가 아님")
+    require(activity, "std::make_unique<WifiSelectionActivity>", "학습 진입 시 Wi-Fi 연결 경로가 없음")
+    require(activity, 'esp_sntp_setservername(0, "pool.ntp.org")', "NTP 시간 동기화가 없음")
+    require(activity, "view_ = View::SyncingTime", "시간 동기화 화면 상태가 없음")
+    require(activity, "WiFi.mode(WIFI_OFF)", "시간 동기화 후 Wi-Fi를 끄지 않음")
+    require(activity, "openSelectedDeck();", "동기화 실패 시 오프라인 학습으로 진행하지 않음")
 
     print("PASS: Study 덱, 스케줄, 저장, 홈 진입 및 시각 동기화 연결이 확인됐습니다.")
     return 0
