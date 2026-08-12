@@ -44,6 +44,10 @@ def main() -> int:
     require(activity, "kMaxFeedEntryBytes = 16 * 1024", "비정상적으로 큰 피드 항목 제한이 없음")
     require(activity, "kMaxArticleBytes = 48 * 1024", "본문 메모리 사용량 제한이 없음")
     require(activity, "const std::string_view body", "본문 전체를 중복 할당하고 있음")
+    require(activity, "kNetworkAttempts = 3", "일시적인 HTTPS 실패 자동 재시도가 없음")
+    require(activity, "waitForWifi()", "요청 전 Wi-Fi 연결 확인이 없음")
+    require(activity, "renderer.getTextAdvanceX", "Markdown span을 실제 진행 폭으로 배치하지 않음")
+    require(activity, "kTextRightSafetyPx", "합성 굵게의 우측 안전 여백이 없음")
     if "std::string xml" in activity:
         raise AssertionError("Atom 피드 전체를 RAM에 적재하고 있습니다")
     require(activity_h, "kMaxTopics = 20", "최신 토픽 개수 제한이 없음")

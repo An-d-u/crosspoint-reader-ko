@@ -23,7 +23,20 @@ constexpr const char* kTopicPathPrefix = "/topic/";
 constexpr size_t kMaxArticleBytes = 48 * 1024;
 constexpr size_t kMaxFeedEntryBytes = 16 * 1024;
 constexpr uint32_t kNetworkTimeoutMs = 15000;
+constexpr int kNetworkAttempts = 3;
+constexpr uint32_t kRetryDelayMs = 350;
+constexpr int kTextRightSafetyPx = 2;
 using ResponseWriter = bool (*)(void*, const uint8_t*, size_t);
+
+bool waitForWifi() {
+  if (WiFi.status() == WL_CONNECTED) return true;
+  WiFi.reconnect();
+  const uint32_t startedAt = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startedAt < 4000) {
+    delay(100);
+  }
+  return WiFi.status() == WL_CONNECTED;
+}
 
 bool readResponseBytes(NetworkClientSecure& client, size_t byteCount, void* context, ResponseWriter writer) {
   uint8_t buffer[512];
@@ -38,6 +51,7 @@ bool readResponseBytes(NetworkClientSecure& client, size_t byteCount, void* cont
 }
 
 bool fetchGeekNews(const std::string& path, void* context, ResponseWriter writer) {
+  if (!waitForWifi()) return false;
   NetworkClientSecure client;
   // 공개 읽기 전용 콘텐츠이며, 전체 CA 번들은 ESP32-C3의 DROM 한도를 초과한다.
   client.setInsecure();
@@ -120,9 +134,14 @@ bool receiveStringChunk(void* rawContext, const uint8_t* data, const size_t leng
 }
 
 bool fetchGeekNewsArticle(const std::string& path, std::string& output) {
+  for (int attempt = 0; attempt < kNetworkAttempts; ++attempt) {
+    output.clear();
+    StringResponseContext context{&output, kMaxArticleBytes};
+    if (fetchGeekNews(path, &context, receiveStringChunk) && !output.empty()) return true;
+    if (attempt + 1 < kNetworkAttempts) delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
+  }
   output.clear();
-  StringResponseContext context{&output, kMaxArticleBytes};
-  return fetchGeekNews(path, &context, receiveStringChunk) && !output.empty();
+  return false;
 }
 
 std::string unwrapCdata(std::string value) {
@@ -305,11 +324,18 @@ bool GeekNewsActivity::receiveFeedChunk(void* rawContext, const uint8_t* data, c
 }
 
 void GeekNewsActivity::loadTopics() {
-  topics_.clear();
-  FeedStreamContext context;
-  context.pending.reserve(2048);
-  context.topics = &topics_;
-  if (!fetchGeekNews(kFeedPath, &context, receiveFeedChunk) || topics_.empty()) {
+  bool loaded = false;
+  for (int attempt = 0; attempt < kNetworkAttempts; ++attempt) {
+    topics_.clear();
+    FeedStreamContext context;
+    context.pending.reserve(2048);
+    context.topics = &topics_;
+    loaded = fetchGeekNews(kFeedPath, &context, receiveFeedChunk) && !topics_.empty();
+    if (loaded) break;
+    if (attempt + 1 < kNetworkAttempts) delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
+  }
+  if (!loaded) {
+    topics_.clear();
     view_ = View::Error;
     requestUpdate();
     return;
@@ -428,17 +454,15 @@ void GeekNewsActivity::appendWrappedSpans(const std::vector<Span>& spans, const 
   const int lineHeight = renderer.getLineHeight(fontId) + 5;
   const int pageWidth = renderer.getScreenWidth();
   const int prefixWidth =
-      prefix.empty() ? 0 : renderer.getTextWidth(fontId, prefix.c_str(), EpdFontFamily::BOLD);
+      prefix.empty() ? 0 : renderer.getTextAdvanceX(fontId, prefix.c_str(), EpdFontFamily::BOLD);
 
   RichLine line;
   line.indent = indent;
   line.height = lineHeight;
   line.quote = quote;
-  int width = 0;
   bool hasBodyText = false;
   if (!prefix.empty()) {
     line.spans.push_back({prefix, InlineStyle::Bold});
-    width = prefixWidth;
   }
 
   auto styleFor = [](const InlineStyle style) {
@@ -452,8 +476,26 @@ void GeekNewsActivity::appendWrappedSpans(const std::vector<Span>& spans, const 
     line.indent = indent + prefixWidth;
     line.height = lineHeight;
     line.quote = quote;
-    width = 0;
     hasBodyText = false;
+  };
+  auto measureLine = [&]() {
+    int advance = 0;
+    for (const Span& lineSpan : line.spans) {
+      advance += renderer.getTextAdvanceX(fontId, lineSpan.text.c_str(), styleFor(lineSpan.style));
+    }
+    return advance;
+  };
+  auto appendCharacter = [&](const std::string& character, const InlineStyle style) {
+    if (!line.spans.empty() && line.spans.back().style == style) {
+      line.spans.back().text += character;
+    } else {
+      line.spans.push_back({character, style});
+    }
+  };
+  auto removeCharacter = [&](const size_t bytes) {
+    Span& last = line.spans.back();
+    last.text.resize(last.text.size() - bytes);
+    if (last.text.empty()) line.spans.pop_back();
   };
 
   for (const Span& span : spans) {
@@ -461,15 +503,16 @@ void GeekNewsActivity::appendWrappedSpans(const std::vector<Span>& spans, const 
       const size_t bytes = std::min(utf8CharBytes(static_cast<unsigned char>(span.text[index])),
                                     span.text.size() - index);
       const std::string character = span.text.substr(index, bytes);
-      const int characterWidth = renderer.getTextWidth(fontId, character.c_str(), styleFor(span.style));
-      const int available = pageWidth - metrics.contentSidePadding * 2 - line.indent - (quote ? 10 : 0);
-      if (hasBodyText && width + characterWidth > available) pushLine();
-      if (!line.spans.empty() && line.spans.back().style == span.style) {
-        line.spans.back().text += character;
-      } else {
-        line.spans.push_back({character, span.style});
+      appendCharacter(character, span.style);
+      int candidateWidth = measureLine();
+      const int available = pageWidth - metrics.contentSidePadding * 2 - line.indent - (quote ? 10 : 0) -
+                            kTextRightSafetyPx;
+      if (hasBodyText && candidateWidth > available) {
+        removeCharacter(bytes);
+        pushLine();
+        appendCharacter(character, span.style);
+        candidateWidth = measureLine();
       }
-      width += characterWidth;
       hasBodyText = true;
       index += bytes;
     }
@@ -735,7 +778,7 @@ void GeekNewsActivity::drawArticle() {
       EpdFontFamily::Style style = EpdFontFamily::REGULAR;
       if (span.style == InlineStyle::Bold) style = EpdFontFamily::BOLD;
       if (span.style == InlineStyle::Italic) style = EpdFontFamily::ITALIC;
-      const int width = renderer.getTextWidth(fontId, span.text.c_str(), style);
+      const int width = renderer.getTextAdvanceX(fontId, span.text.c_str(), style);
       if (span.style == InlineStyle::Code) renderer.drawRect(x - 1, y - 1, width + 2, line.height - 2);
       renderer.drawText(fontId, x, y, span.text.c_str(), true, style);
       if (span.style == InlineStyle::Link) renderer.drawLine(x, y + line.height - 4, x + width, y + line.height - 4);
