@@ -62,8 +62,8 @@ back to the other partition using the "Swap boot partition" button here https://
 ### Web (specific firmware version)
 
 1. Connect your Xteink X4 to your computer via USB-C
-2. Download the `firmware.bin` file from the release of your choice via the [releases page](https://github.com/crosspoint-reader/crosspoint-reader/releases)
-3. Go to https://xteink.dve.al/ and flash the firmware file using the "OTA fast flash controls" section
+2. 원하는 버전의 전체 플래시 이미지 `CrossPoint-<version>.bin`을 [릴리스 페이지](https://github.com/crosspoint-reader/crosspoint-reader/releases)에서 다운로드합니다.
+3. https://xteink.dve.al/ 에서 주소 `0x0`을 사용하는 전체 플래시 방식으로 이미지를 기록합니다. `firmware.bin`만 기록하면 글꼴 assets가 설치되지 않습니다.
 
 To revert back to the official firmware, you can flash the latest official firmware from https://xteink.dve.al/, or swap
 back to the other partition using the "Swap boot partition" button here https://xteink.dve.al/debug.
@@ -74,7 +74,7 @@ back to the other partition using the "Swap boot partition" button here https://
 ```bash
 pip install esptool
 ```
-2. Download the `firmware.bin` file from the release of your choice via the [releases page](https://github.com/crosspoint-reader/crosspoint-reader/releases)
+2. 원하는 버전의 전체 플래시 이미지 `CrossPoint-<version>.bin`을 [릴리스 페이지](https://github.com/crosspoint-reader/crosspoint-reader/releases)에서 다운로드합니다.
 3. Connect your Xteink X4 to your computer via USB-C.
 4. Note the device location. On Linux, run `dmesg` after connecting. On MacOS, run :
 ```bash
@@ -82,7 +82,7 @@ log stream --predicate 'subsystem == "com.apple.iokit"' --info
 ```
 5. Flash the firmware :
 ```bash
-esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 write_flash 0x10000 /path/to/firmware.bin
+esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 write_flash 0x0 /path/to/CrossPoint-version.bin
 ```
 Change `/dev/ttyACM0` to the device for your system.
 

@@ -107,6 +107,10 @@ typedef struct {
   uint32_t ligatureCp;  ///< Codepoint of the replacement ligature glyph
 } __attribute__((packed)) EpdLigaturePair;
 
+/// 외부 파티션처럼 직접 포인터로 접근할 수 없는 저장소에서 글리프 비트맵을 읽는다.
+/// 반환 포인터는 다음 read 호출 전까지만 유효해도 된다.
+using EpdBitmapReader = const uint8_t* (*)(void* context, uint32_t offset, uint16_t length);
+
 /// Data stored for FONT AS A WHOLE
 typedef struct {
   const uint8_t* bitmap;                ///< Glyph bitmaps, concatenated
@@ -129,4 +133,6 @@ typedef struct {
   uint8_t kernRightClassCount;           ///< Number of distinct right classes (matrix cols)
   const EpdLigaturePair* ligaturePairs;  ///< Sorted ligature pair table (nullptr if none)
   uint32_t ligaturePairCount;            ///< Number of entries in ligaturePairs
+  EpdBitmapReader bitmapReader;          ///< Optional on-demand bitmap reader
+  void* bitmapReaderContext;             ///< Context passed to bitmapReader
 } EpdFontData;

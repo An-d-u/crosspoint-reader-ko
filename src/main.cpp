@@ -18,6 +18,7 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "FontAssetManager.h"
 #if CROSSPOINT_ENABLE_KOREADER_SYNC
 #include "KOReaderCredentialStore.h"
 #endif
@@ -41,12 +42,15 @@ EpdFont pretendard10RegularFont(&pretendard_10_regular);
 EpdFontFamily uiFontFamily(&pretendard10RegularFont);
 
 // UI 일본어 fallback: primary에 없는 일본어 글리프만 여기서 찾는다
-EpdFont uiJapaneseFallbackFont(&kopubworld_dotum_jp_10_regular);
+EpdFontData uiJapaneseFontData = kopubworld_dotum_jp_10_regular;
+EpdFont uiJapaneseFallbackFont(&uiJapaneseFontData);
 EpdFontFamily uiJapaneseFallbackFamily(&uiJapaneseFallbackFont);
 
 // 리더 기본 글꼴: Batang 계열 + 일본어 fallback, Bold는 렌더러가 synthetic 처리
-EpdFont reader14RegularFont(&kopubworld_batang_jp_14_regular);
+EpdFontData readerFontData = kopubworld_batang_jp_14_regular;
+EpdFont reader14RegularFont(&readerFontData);
 EpdFontFamily kopub14FontFamily(&reader14RegularFont);
+FontAssetManager fontAssetManager;
 
 // Korean fonts loading from SD card is disabled due to memory constraints
 // Font files should be in /.crosspoint/fonts/ directory
@@ -223,6 +227,13 @@ void setupDisplayAndFonts() {
   activityManager.begin();
   LOG_DBG("MAIN", "Display initialized");
 
+  const bool externalFontsReady =
+      fontAssetManager.begin(uiJapaneseFontData, kopubworld_dotum_jp_10_regularBitmapSize, readerFontData,
+                             kopubworld_batang_jp_14_regularBitmapSize);
+  if (!externalFontsReady) {
+    LOG_ERR("MAIN", "External font assets unavailable; using embedded UI font fallback");
+  }
+
   // Initialize font decompressor for compressed reader fonts
   if (!fontDecompressor.init()) {
     LOG_ERR("MAIN", "Font decompressor init failed");
@@ -232,13 +243,14 @@ void setupDisplayAndFonts() {
   // Korean build: Bookerly fonts omitted; KoPub Batang registered below as default reader font.
 
   // UI font (Pretendard 10pt) - used for all UI sizes in Korean version
-  renderer.insertFont(UI_FONT_ID, &uiFontFamily, &uiJapaneseFallbackFamily);
-  renderer.insertFont(UI_10_FONT_ID, &uiFontFamily, &uiJapaneseFallbackFamily);
-  renderer.insertFont(UI_12_FONT_ID, &uiFontFamily, &uiJapaneseFallbackFamily);
-  renderer.insertFont(SMALL_FONT_ID, &uiFontFamily, &uiJapaneseFallbackFamily);
+  const EpdFontFamily* uiJapaneseFallback = externalFontsReady ? &uiJapaneseFallbackFamily : nullptr;
+  renderer.insertFont(UI_FONT_ID, &uiFontFamily, uiJapaneseFallback);
+  renderer.insertFont(UI_10_FONT_ID, &uiFontFamily, uiJapaneseFallback);
+  renderer.insertFont(UI_12_FONT_ID, &uiFontFamily, uiJapaneseFallback);
+  renderer.insertFont(SMALL_FONT_ID, &uiFontFamily, uiJapaneseFallback);
 
   // Korean EPUB reader font (KoPub Batang 14pt) - always register as fallback
-  renderer.insertFont(KOPUB_14_FONT_ID, &kopub14FontFamily);
+  renderer.insertFont(KOPUB_14_FONT_ID, externalFontsReady ? &kopub14FontFamily : &uiFontFamily);
 
   // Try to load custom reader font from SD card
   loadCustomReaderFont(renderer);

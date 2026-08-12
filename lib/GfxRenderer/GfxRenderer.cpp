@@ -8,6 +8,9 @@
 #include "FontCacheManager.h"
 
 const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph) const {
+  if (fontData->bitmapReader != nullptr) {
+    return fontData->bitmapReader(fontData->bitmapReaderContext, glyph->dataOffset, glyph->dataLength);
+  }
   if (fontData->groups != nullptr) {
     auto* fd = fontCacheManager_ ? fontCacheManager_->getDecompressor() : nullptr;
     if (!fd) {
@@ -20,7 +23,7 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
     // must consume it (draw the glyph) before requesting another bitmap.
     return fd->getBitmap(fontData, glyph, glyphIndex);
   }
-  return &fontData->bitmap[glyph->dataOffset];
+  return fontData->bitmap != nullptr ? &fontData->bitmap[glyph->dataOffset] : nullptr;
 }
 
 void GfxRenderer::begin() {

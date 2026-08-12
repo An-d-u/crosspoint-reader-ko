@@ -31,9 +31,9 @@ def main() -> int:
     main_cpp = MAIN_CPP.read_text(encoding="utf-8")
     if "EpdFont pretendard10RegularFont(&pretendard_10_regular);" not in main_cpp:
         failures.append("main.cpp should keep Pretendard as the UI primary flash font")
-    if "EpdFont uiJapaneseFallbackFont(&kopubworld_dotum_jp_10_regular);" not in main_cpp:
+    if "EpdFont uiJapaneseFallbackFont(&uiJapaneseFontData);" not in main_cpp:
         failures.append("main.cpp should define a dedicated Japanese UI fallback flash font")
-    if "renderer.insertFont(UI_FONT_ID, &uiFontFamily, &uiJapaneseFallbackFamily);" not in main_cpp:
+    if "renderer.insertFont(UI_FONT_ID, &uiFontFamily, uiJapaneseFallback);" not in main_cpp:
         failures.append("main.cpp should register UI font with an explicit Japanese fallback family")
 
     if failures:

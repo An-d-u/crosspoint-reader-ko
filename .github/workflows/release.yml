@@ -52,7 +52,8 @@ jobs:
           --pad-to-size 16MB \
           0x0 .pio/build/gh_release/bootloader.bin \
           0x8000 .pio/build/gh_release/partitions.bin \
-          0x10000 .pio/build/gh_release/firmware.bin
+          0x10000 .pio/build/gh_release/firmware.bin \
+          0x810000 .pio/build/gh_release/assets.bin
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
@@ -64,15 +65,17 @@ jobs:
           .pio/build/gh_release/firmware.elf
           .pio/build/gh_release/firmware.map
           .pio/build/gh_release/partitions.bin
+          .pio/build/gh_release/assets.bin
+          .pio/build/gh_release/firmware-full.bin
 
     - name: Create Release with Assets
       uses: softprops/action-gh-release@v2
       with:
         files: |
           .pio/build/gh_release/CrossPoint-${{ github.ref_name }}.bin
-          .pio/build/gh_release/firmware.bin
           .pio/build/gh_release/bootloader.bin
           .pio/build/gh_release/partitions.bin
+          .pio/build/gh_release/assets.bin
         generate_release_notes: false
         draft: false
         prerelease: false

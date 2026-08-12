@@ -23,6 +23,10 @@ def main() -> int:
         print("FAIL: release workflow full-flash output name is missing.")
         return 1
 
+    if "0x810000 .pio/build/gh_release/assets.bin" not in workflow:
+        print("FAIL: release workflow does not include the external font assets image.")
+        return 1
+
     print("PASS: release workflow pads full-flash image to 16MB.")
     return 0
 

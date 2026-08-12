@@ -317,7 +317,10 @@ const uint8_t* UnifiedFontFamily::getGlyphBitmap(uint32_t cp, EpdFontStyle style
     const EpdFontData* data = glyphLookup.data;
     const EpdGlyph* glyph = glyphLookup.glyph;
     if (data && glyph) {
-      return &data->bitmap[glyph->dataOffset];
+      if (data->bitmapReader != nullptr) {
+        return data->bitmapReader(data->bitmapReaderContext, glyph->dataOffset, glyph->dataLength);
+      }
+      return data->bitmap != nullptr ? &data->bitmap[glyph->dataOffset] : nullptr;
     }
     return nullptr;
   } else if (sdFont) {

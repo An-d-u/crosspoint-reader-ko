@@ -14,7 +14,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PARTITIONS_CSV = ROOT / "partitions.csv"
 FLASH_SIZE = 0x1000000
-MIN_EXPECTED_APP_SIZE = 0xD00000
+EXPECTED_APP_SIZE = 0x800000
+EXPECTED_ASSET_OFFSET = 0x810000
+EXPECTED_ASSET_SIZE = 0x7E0000
 
 
 def main() -> int:
@@ -41,9 +43,20 @@ def main() -> int:
         if app[2] != "factory":
             failures.append(f"Single app partition should use subtype factory, found {app[2]}")
         size = int(app[4], 16)
-        if size < MIN_EXPECTED_APP_SIZE:
+        if size != EXPECTED_APP_SIZE:
+            failures.append(f"Single app partition should be 0x{EXPECTED_APP_SIZE:X}, found 0x{size:X}")
+
+    asset_rows = [row for row in rows if len(row) >= 5 and row[0] == "assets"]
+    if len(asset_rows) != 1:
+        failures.append(f"Expected exactly one assets partition, found {len(asset_rows)}")
+    else:
+        asset = asset_rows[0]
+        if asset[1] != "data" or asset[2] != "0x40":
+            failures.append("assets partition should use custom data subtype 0x40")
+        if int(asset[3], 16) != EXPECTED_ASSET_OFFSET or int(asset[4], 16) != EXPECTED_ASSET_SIZE:
             failures.append(
-                f"Single app partition should be at least 0x{MIN_EXPECTED_APP_SIZE:X}, found 0x{size:X}"
+                "assets partition layout mismatch: "
+                f"offset={asset[3]}, size={asset[4]}"
             )
 
     if any(row[0] == "app1" for row in rows):

@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <string_view>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
@@ -511,15 +512,15 @@ void GeekNewsActivity::layoutMarkdown(const std::string& markdown) {
   if (bodyStart == std::string::npos) bodyStart = 0;
   size_t bodyEnd = markdown.find("\n## Comments", bodyStart);
   if (bodyEnd == std::string::npos) bodyEnd = markdown.size();
-  const std::string body = markdown.substr(bodyStart, bodyEnd - bodyStart);
+  const std::string_view body(markdown.data() + bodyStart, bodyEnd - bodyStart);
 
   bool inCodeFence = false;
   size_t cursor = 0;
   while (cursor <= body.size()) {
     const size_t end = body.find('\n', cursor);
-    std::string line = body.substr(cursor, end == std::string::npos ? std::string::npos : end - cursor);
+    std::string line(body.substr(cursor, end == std::string_view::npos ? std::string_view::npos : end - cursor));
     if (!line.empty() && line.back() == '\r') line.pop_back();
-    cursor = end == std::string::npos ? body.size() + 1 : end + 1;
+    cursor = end == std::string_view::npos ? body.size() + 1 : end + 1;
 
     if (trim(line).rfind("```", 0) == 0) {
       inCodeFence = !inCodeFence;
