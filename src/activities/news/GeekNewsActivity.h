@@ -63,6 +63,7 @@ class GeekNewsActivity final : public Activity {
   std::vector<size_t> pageStarts_;
   size_t selectedTopic_ = 0;
   size_t currentPage_ = 0;
+  int pagesUntilFullRefresh_ = 0;
   bool loadPending_ = false;
   bool layoutOverflow_ = false;
   int pendingTopicId_ = 0;
@@ -80,9 +81,10 @@ class GeekNewsActivity final : public Activity {
   void appendWrappedSpans(const std::vector<Span>& spans, const std::string& prefix, int indent, bool quote,
                           int spacingAfter);
   void rebuildPageStarts();
-  void drawTopics();
-  void drawArticle();
-  void drawStatus(const char* message, bool retry);
+  void drawTopics(bool textOnly = false);
+  void drawArticle(bool textOnly = false);
+  void drawStatus(const char* message, bool retry, bool textOnly = false);
+  void drawCurrentView(bool textOnly);
 
   static bool receiveFeedChunk(void* context, const uint8_t* data, size_t length);
   static bool parseFeedEntry(const std::string& entry, Topic& topic);

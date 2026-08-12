@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -674,11 +675,13 @@ int StudyActivity::drawWrapped(const int fontId, const int y, const char* text, 
   return currentY;
 }
 
-void StudyActivity::drawDeckScreen() {
+void StudyActivity::drawDeckScreen(const bool textOnly) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int width = renderer.getScreenWidth();
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, width, metrics.headerHeight}, tr(STR_STUDY_TITLE),
-                 deck_.meta().name);
+  if (!textOnly) {
+    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, width, metrics.headerHeight}, tr(STR_STUDY_TITLE),
+                   deck_.meta().name);
+  }
 
   int y = metrics.topPadding + metrics.headerHeight + 35;
   y = drawWrapped(KOPUB_14_FONT_ID, y, deck_.meta().name, 2, true) + 25;
@@ -694,17 +697,21 @@ void StudyActivity::drawDeckScreen() {
   if (!clockReady_) y = drawWrapped(UI_10_FONT_ID, y + 8, tr(STR_STUDY_CLOCK_WARNING), 3, true);
   if (queueCount_ == 0) drawWrapped(UI_10_FONT_ID, y + 15, tr(STR_STUDY_NOTHING_DUE), 2);
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_STUDY_START), tr(STR_STUDY_PREV_DECK),
-                                            tr(STR_STUDY_NEXT_DECK));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  if (!textOnly) {
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_STUDY_START), tr(STR_STUDY_PREV_DECK),
+                                              tr(STR_STUDY_NEXT_DECK));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
 }
 
-void StudyActivity::drawCardScreen(const bool answer) {
+void StudyActivity::drawCardScreen(const bool answer, const bool textOnly) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int width = renderer.getScreenWidth();
   char remaining[32];
   std::snprintf(remaining, sizeof(remaining), "%d", queueCount_ - queuePosition_ + pendingCount_ + 1);
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, width, metrics.headerHeight}, deck_.meta().name, remaining);
+  if (!textOnly) {
+    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, width, metrics.headerHeight}, deck_.meta().name, remaining);
+  }
 
   int y = metrics.topPadding + metrics.headerHeight + 30;
   const char* headwordRubySource =
@@ -712,14 +719,14 @@ void StudyActivity::drawCardScreen(const bool answer) {
   y = drawWrapped(KOPUB_14_FONT_ID, y, note_.field(study::Field::Headword), 3, true, 0, headwordRubySource);
   if (answer) {
     y += 15;
-    renderer.drawLine(metrics.contentSidePadding, y, width - metrics.contentSidePadding, y);
+    if (!textOnly) renderer.drawLine(metrics.contentSidePadding, y, width - metrics.contentSidePadding, y);
     y += 20;
     y = drawWrapped(UI_10_FONT_ID, y, note_.field(study::Field::Reading), 2);
     y = drawWrapped(KOPUB_14_FONT_ID, y + 4, note_.field(study::Field::Meaning), 4);
     y = drawWrapped(UI_10_FONT_ID, y, note_.field(study::Field::PartOfSpeech), 1);
     if (!note_.empty(study::Field::Sentence)) {
       y += 15;
-      renderer.drawLine(metrics.contentSidePadding, y, width - metrics.contentSidePadding, y);
+      if (!textOnly) renderer.drawLine(metrics.contentSidePadding, y, width - metrics.contentSidePadding, y);
       y += 18;
       const int contentBottom = renderer.getScreenHeight() - metrics.buttonHintsHeight - metrics.verticalSpacing - 4;
       const int smallLineHeight = renderer.getTextHeight(UI_10_FONT_ID) + 6;
@@ -732,47 +739,64 @@ void StudyActivity::drawCardScreen(const bool answer) {
       drawWrapped(UI_10_FONT_ID, y, note_.field(study::Field::SentenceMeaning), 8, false, contentBottom);
     }
 
-    char again[20], hard[20], good[20], easy[20];
-    study::formatDelay(previews_[0].delayMinutes, previews_[0].intervalDays, again, sizeof(again));
-    study::formatDelay(previews_[1].delayMinutes, previews_[1].intervalDays, hard, sizeof(hard));
-    study::formatDelay(previews_[2].delayMinutes, previews_[2].intervalDays, good, sizeof(good));
-    study::formatDelay(previews_[3].delayMinutes, previews_[3].intervalDays, easy, sizeof(easy));
-    char againLabel[32], hardLabel[32], goodLabel[32], easyLabel[32];
-    std::snprintf(againLabel, sizeof(againLabel), "%s %s", tr(STR_STUDY_AGAIN), again);
-    std::snprintf(hardLabel, sizeof(hardLabel), "%s %s", tr(STR_STUDY_HARD), hard);
-    std::snprintf(goodLabel, sizeof(goodLabel), "%s %s", tr(STR_STUDY_GOOD), good);
-    std::snprintf(easyLabel, sizeof(easyLabel), "%s %s", tr(STR_STUDY_EASY), easy);
-    const auto labels = mappedInput.mapLabels(againLabel, goodLabel, hardLabel, easyLabel);
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  } else {
+    if (!textOnly) {
+      char again[20], hard[20], good[20], easy[20];
+      study::formatDelay(previews_[0].delayMinutes, previews_[0].intervalDays, again, sizeof(again));
+      study::formatDelay(previews_[1].delayMinutes, previews_[1].intervalDays, hard, sizeof(hard));
+      study::formatDelay(previews_[2].delayMinutes, previews_[2].intervalDays, good, sizeof(good));
+      study::formatDelay(previews_[3].delayMinutes, previews_[3].intervalDays, easy, sizeof(easy));
+      char againLabel[32], hardLabel[32], goodLabel[32], easyLabel[32];
+      std::snprintf(againLabel, sizeof(againLabel), "%s %s", tr(STR_STUDY_AGAIN), again);
+      std::snprintf(hardLabel, sizeof(hardLabel), "%s %s", tr(STR_STUDY_HARD), hard);
+      std::snprintf(goodLabel, sizeof(goodLabel), "%s %s", tr(STR_STUDY_GOOD), good);
+      std::snprintf(easyLabel, sizeof(easyLabel), "%s %s", tr(STR_STUDY_EASY), easy);
+      const auto labels = mappedInput.mapLabels(againLabel, goodLabel, hardLabel, easyLabel);
+      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    }
+  } else if (!textOnly) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_STUDY_SHOW_ANSWER), "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
 }
 
-void StudyActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+void StudyActivity::drawCurrentScreen(const bool textOnly) {
   if (view_ == View::NoDeck) {
     const auto& metrics = UITheme::getInstance().getMetrics();
-    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
-                   tr(STR_STUDY_TITLE));
+    if (!textOnly) {
+      GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
+                     tr(STR_STUDY_TITLE));
+    }
     int y = metrics.topPadding + metrics.headerHeight + 45;
     y = drawWrapped(UI_12_FONT_ID, y, tr(STR_STUDY_NO_DECK), 2, true) + 20;
     drawWrapped(UI_10_FONT_ID, y, tr(STR_STUDY_INSTALL_HINT), 5);
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    if (!textOnly) {
+      const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    }
   } else if (view_ == View::SyncingTime) {
     const auto& metrics = UITheme::getInstance().getMetrics();
-    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
-                   tr(STR_STUDY_TITLE));
+    if (!textOnly) {
+      GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
+                     tr(STR_STUDY_TITLE));
+    }
     renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_SYNCING_TIME), true,
                               EpdFontFamily::BOLD);
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    if (!textOnly) {
+      const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    }
   } else if (view_ == View::Deck) {
-    drawDeckScreen();
+    drawDeckScreen(textOnly);
   } else {
-    drawCardScreen(view_ == View::Answer);
+    drawCardScreen(view_ == View::Answer, textOnly);
   }
+}
+
+void StudyActivity::render(RenderLock&&) {
+  renderer.clearScreen();
+  drawCurrentScreen(false);
   renderer.displayBuffer();
+  if (SETTINGS.textAntiAliasing) {
+    ReaderUtils::renderAntiAliased(renderer, [this]() { drawCurrentScreen(true); });
+  }
 }

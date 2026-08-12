@@ -55,8 +55,9 @@ class StudyActivity final : public Activity {
   int64_t reviewEpochMilliseconds();
   int drawWrapped(int fontId, int y, const char* text, int maxLines, bool bold = false,
                   int bottomY = 0, const char* rubySource = nullptr) const;
-  void drawDeckScreen();
-  void drawCardScreen(bool answer);
+  void drawDeckScreen(bool textOnly = false);
+  void drawCardScreen(bool answer, bool textOnly = false);
+  void drawCurrentScreen(bool textOnly);
 
   HalFile metaFile_;
   HalFile deckFile_;

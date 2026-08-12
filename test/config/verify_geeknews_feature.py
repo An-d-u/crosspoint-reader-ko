@@ -59,6 +59,12 @@ def main() -> int:
     require(activity, "kTextRightSafetyPx", "합성 굵게의 우측 안전 여백이 없음")
     require(activity, "MappedInputManager::Button::PageBack", "우측 위 버튼으로 이전 페이지를 열 수 없음")
     require(activity, "MappedInputManager::Button::PageForward", "우측 아래 버튼으로 다음 페이지를 열 수 없음")
+    require(activity_h, "pagesUntilFullRefresh_ = 0", "GeekNews 본문 전체 새로고침 카운터가 없음")
+    require(activity, "ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh_)",
+            "GeekNews 본문에 전자책 새로고침 주기를 적용하지 않음")
+    require(activity, "if (SETTINGS.textAntiAliasing)", "GeekNews 화면이 텍스트 안티앨리어싱 설정을 따르지 않음")
+    require(activity, "ReaderUtils::renderAntiAliased", "GeekNews 화면에 회색조 렌더링 패스가 없음")
+    require(activity, "drawCurrentView(true)", "GeekNews 콘텐츠만 다시 그리는 안티앨리어싱 경로가 없음")
     if "std::string xml" in activity:
         raise AssertionError("Atom 피드 전체를 RAM에 적재하고 있습니다")
     require(activity_h, "kMaxTopics = 20", "최신 토픽 개수 제한이 없음")
