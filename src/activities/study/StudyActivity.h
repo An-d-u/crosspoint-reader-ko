@@ -53,7 +53,8 @@ class StudyActivity final : public Activity {
   int resolveToday();
   int nowMinute() const;
   int64_t reviewEpochMilliseconds();
-  int drawWrapped(int fontId, int y, const char* text, int maxLines, bool bold = false) const;
+  int drawWrapped(int fontId, int y, const char* text, int maxLines, bool bold = false,
+                  int bottomY = 0, const char* rubySource = nullptr) const;
   void drawDeckScreen();
   void drawCardScreen(bool answer);
 

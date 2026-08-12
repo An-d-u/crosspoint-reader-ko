@@ -44,6 +44,10 @@ def main() -> int:
     require(activity, "view_ = View::SyncingTime", "시간 동기화 화면 상태가 없음")
     require(activity, "WiFi.mode(WIFI_OFF)", "시간 동기화 후 Wi-Fi를 끄지 않음")
     require(activity, "openSelectedDeck();", "동기화 실패 시 오프라인 학습으로 진행하지 않음")
+    require(activity, "parseStudyText", "Anki 후리가나 표기를 해석하지 않음")
+    require(activity, "enrichHeadwordRuby", "예문의 읽기를 표제어 한자에 보완하지 않음")
+    require(activity, "wrapStudyText", "공백 없는 일본어 예문을 글자 단위로 줄바꿈하지 않음")
+    require(activity, "contentBottom - readingReserve - meaningReserve", "예문이 남은 화면 높이를 활용하지 않음")
 
     print("PASS: Study 덱, 스케줄, 저장, 홈 진입 및 시각 동기화 연결이 확인됐습니다.")
     return 0

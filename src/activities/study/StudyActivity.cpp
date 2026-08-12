@@ -5,10 +5,12 @@
 #include <WiFi.h>
 #include <esp_sntp.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <vector>
 
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
@@ -19,6 +21,194 @@ constexpr const char* kStudyRoot = "/study";
 constexpr int64_t kReasonableEpoch = 1704067200;  // 2024-01-01
 constexpr int64_t kSecondsPerDay = 86400;
 constexpr unsigned long kTimeSyncTimeoutMs = 8000;
+
+struct StudyTextToken {
+  std::string base;
+  std::string ruby;
+  int width = 0;
+};
+
+struct StudyTextLine {
+  std::vector<StudyTextToken> tokens;
+  int width = 0;
+  bool hasRuby = false;
+};
+
+uint32_t decodeCodepoint(const std::string& text, const size_t offset, size_t& next) {
+  const auto first = static_cast<uint8_t>(text[offset]);
+  size_t length = 1;
+  uint32_t codepoint = first;
+  if ((first & 0xE0) == 0xC0) {
+    length = 2;
+    codepoint = first & 0x1F;
+  } else if ((first & 0xF0) == 0xE0) {
+    length = 3;
+    codepoint = first & 0x0F;
+  } else if ((first & 0xF8) == 0xF0) {
+    length = 4;
+    codepoint = first & 0x07;
+  }
+  if (offset + length > text.size()) length = 1;
+  for (size_t index = 1; index < length; ++index) {
+    const auto continuation = static_cast<uint8_t>(text[offset + index]);
+    if ((continuation & 0xC0) != 0x80) {
+      length = 1;
+      codepoint = first;
+      break;
+    }
+    codepoint = (codepoint << 6) | (continuation & 0x3F);
+  }
+  next = offset + length;
+  return codepoint;
+}
+
+bool isHanCodepoint(const uint32_t codepoint) {
+  return (codepoint >= 0x3400 && codepoint <= 0x4DBF) ||
+         (codepoint >= 0x4E00 && codepoint <= 0x9FFF) ||
+         (codepoint >= 0xF900 && codepoint <= 0xFAFF) ||
+         (codepoint >= 0x20000 && codepoint <= 0x2FA1F);
+}
+
+void appendPlainTokens(std::vector<StudyTextToken>& tokens, const std::string& text) {
+  for (size_t offset = 0; offset < text.size();) {
+    size_t next = offset + 1;
+    decodeCodepoint(text, offset, next);
+    tokens.push_back({text.substr(offset, next - offset), {}});
+    offset = next;
+  }
+}
+
+std::vector<StudyTextToken> parseStudyText(const std::string& text) {
+  std::vector<StudyTextToken> tokens;
+  tokens.reserve(text.size() / 3 + 1);
+  for (size_t offset = 0; offset < text.size();) {
+    if (text[offset] == '[') {
+      const size_t baseEnd = text.find(']', offset + 1);
+      if (baseEnd != std::string::npos) {
+        const std::string base = text.substr(offset + 1, baseEnd - offset - 1);
+        if (baseEnd + 1 < text.size() && text[baseEnd + 1] == '(') {
+          const size_t rubyEnd = text.find(')', baseEnd + 2);
+          if (rubyEnd != std::string::npos) {
+            tokens.push_back({base, text.substr(baseEnd + 2, rubyEnd - baseEnd - 2)});
+            offset = rubyEnd + 1;
+            continue;
+          }
+        }
+        appendPlainTokens(tokens, base);
+        offset = baseEnd + 1;
+        continue;
+      }
+    }
+
+    size_t next = offset + 1;
+    const uint32_t codepoint = decodeCodepoint(text, offset, next);
+    if (isHanCodepoint(codepoint)) {
+      size_t baseEnd = next;
+      while (baseEnd < text.size()) {
+        size_t following = baseEnd + 1;
+        if (!isHanCodepoint(decodeCodepoint(text, baseEnd, following))) break;
+        baseEnd = following;
+      }
+      if (baseEnd < text.size() && text[baseEnd] == '(') {
+        const size_t rubyEnd = text.find(')', baseEnd + 1);
+        if (rubyEnd != std::string::npos) {
+          tokens.push_back({text.substr(offset, baseEnd - offset), text.substr(baseEnd + 1, rubyEnd - baseEnd - 1)});
+          offset = rubyEnd + 1;
+          continue;
+        }
+      }
+    }
+
+    tokens.push_back({text.substr(offset, next - offset), {}});
+    offset = next;
+  }
+  return tokens;
+}
+
+std::string enrichHeadwordRuby(const char* headword, const char* sentence) {
+  const std::string source = sentence == nullptr ? std::string{} : sentence;
+  std::vector<StudyTextToken> mappings = parseStudyText(source);
+  mappings.erase(std::remove_if(mappings.begin(), mappings.end(), [](const StudyTextToken& token) {
+                   return token.ruby.empty();
+                 }),
+                 mappings.end());
+  std::sort(mappings.begin(), mappings.end(), [](const StudyTextToken& left, const StudyTextToken& right) {
+    return left.base.size() > right.base.size();
+  });
+
+  const std::string input = headword == nullptr ? std::string{} : headword;
+  std::string output;
+  output.reserve(input.size() + 16);
+  for (size_t offset = 0; offset < input.size();) {
+    const auto mapping = std::find_if(mappings.begin(), mappings.end(), [&](const StudyTextToken& token) {
+      return !token.base.empty() && input.compare(offset, token.base.size(), token.base) == 0;
+    });
+    if (mapping != mappings.end()) {
+      output.push_back('[');
+      output += mapping->base;
+      output += "](";
+      output += mapping->ruby;
+      output.push_back(')');
+      offset += mapping->base.size();
+      continue;
+    }
+    size_t next = offset + 1;
+    decodeCodepoint(input, offset, next);
+    output.append(input, offset, next - offset);
+    offset = next;
+  }
+  return output;
+}
+
+std::vector<StudyTextLine> wrapStudyText(const GfxRenderer& renderer, const int fontId, const int rubyFontId,
+                                         std::vector<StudyTextToken> tokens, const int maxWidth,
+                                         const int maxLines, const EpdFontFamily::Style style) {
+  const auto measure = [&](StudyTextToken& token) {
+    const int baseWidth = renderer.getTextAdvanceX(fontId, token.base.c_str(), style);
+    const int rubyWidth = token.ruby.empty() ? 0 : renderer.getTextAdvanceX(rubyFontId, token.ruby.c_str());
+    token.width = std::max(baseWidth, rubyWidth);
+  };
+  for (auto& token : tokens) measure(token);
+
+  std::vector<StudyTextLine> lines;
+  StudyTextLine line;
+  auto finishLine = [&]() {
+    if (!line.tokens.empty()) lines.push_back(std::move(line));
+    line = StudyTextLine{};
+  };
+  for (StudyTextToken& token : tokens) {
+    if (token.base == "\n") {
+      finishLine();
+      if (static_cast<int>(lines.size()) >= maxLines) break;
+      continue;
+    }
+    if (!line.tokens.empty() && line.width + token.width > maxWidth) {
+      if (static_cast<int>(lines.size()) + 1 >= maxLines) {
+        StudyTextToken ellipsis{"…", {}};
+        measure(ellipsis);
+        while (!line.tokens.empty() && line.width + ellipsis.width > maxWidth) {
+          line.width -= line.tokens.back().width;
+          line.tokens.pop_back();
+        }
+        line.width += ellipsis.width;
+        line.tokens.push_back(std::move(ellipsis));
+        finishLine();
+        return lines;
+      }
+      finishLine();
+    }
+    if (token.width > maxWidth) {
+      token.base = renderer.truncatedText(fontId, token.base.c_str(), maxWidth, style);
+      token.ruby.clear();
+      measure(token);
+    }
+    line.width += token.width;
+    line.hasRuby = line.hasRuby || !token.ruby.empty();
+    line.tokens.push_back(std::move(token));
+  }
+  if (static_cast<int>(lines.size()) < maxLines) finishLine();
+  return lines;
+}
 
 const char* basenameOf(const char* path) {
   const char* slash = std::strrchr(path, '/');
@@ -447,19 +637,39 @@ void StudyActivity::loop() {
   }
 }
 
-int StudyActivity::drawWrapped(const int fontId, const int y, const char* text, const int maxLines,
-                               const bool bold) const {
+int StudyActivity::drawWrapped(const int fontId, const int y, const char* text, int maxLines,
+                               const bool bold, const int bottomY, const char* rubySource) const {
   if (text == nullptr || *text == '\0') return y;
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int width = renderer.getScreenWidth() - metrics.contentSidePadding * 2;
-  const auto lines = renderer.wrappedText(fontId, text, width, maxLines, bold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-  const int lineHeight = renderer.getTextHeight(fontId) + 6;
+  const auto style = bold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+  const std::string enriched = rubySource == nullptr ? std::string(text) : enrichHeadwordRuby(text, rubySource);
+  auto tokens = parseStudyText(enriched);
+  const bool hasRuby = std::any_of(tokens.begin(), tokens.end(), [](const StudyTextToken& token) {
+    return !token.ruby.empty();
+  });
+  const int baseLineHeight = renderer.getTextHeight(fontId) + 6;
+  const int rubyLineHeight = hasRuby ? renderer.getTextHeight(UI_10_FONT_ID) + 3 : 0;
+  if (bottomY > y) {
+    maxLines = std::min(maxLines, (bottomY - y) / std::max(1, baseLineHeight + rubyLineHeight));
+  }
+  if (maxLines <= 0) return y;
+  const auto lines = wrapStudyText(renderer, fontId, UI_10_FONT_ID, std::move(tokens), width, maxLines, style);
   int currentY = y;
-  for (const std::string& line : lines) {
-    const int lineWidth = renderer.getTextWidth(fontId, line.c_str(), bold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-    renderer.drawText(fontId, (renderer.getScreenWidth() - lineWidth) / 2, currentY, line.c_str(), true,
-                      bold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-    currentY += lineHeight;
+  for (const StudyTextLine& line : lines) {
+    const int lineRubyHeight = line.hasRuby ? renderer.getTextHeight(UI_10_FONT_ID) + 3 : 0;
+    int x = (renderer.getScreenWidth() - line.width) / 2;
+    for (const StudyTextToken& token : line.tokens) {
+      const int baseWidth = renderer.getTextAdvanceX(fontId, token.base.c_str(), style);
+      renderer.drawText(fontId, x + (token.width - baseWidth) / 2, currentY + lineRubyHeight,
+                        token.base.c_str(), true, style);
+      if (!token.ruby.empty()) {
+        const int rubyWidth = renderer.getTextAdvanceX(UI_10_FONT_ID, token.ruby.c_str());
+        renderer.drawText(UI_10_FONT_ID, x + (token.width - rubyWidth) / 2, currentY, token.ruby.c_str());
+      }
+      x += token.width;
+    }
+    currentY += baseLineHeight + lineRubyHeight;
   }
   return currentY;
 }
@@ -497,7 +707,9 @@ void StudyActivity::drawCardScreen(const bool answer) {
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, width, metrics.headerHeight}, deck_.meta().name, remaining);
 
   int y = metrics.topPadding + metrics.headerHeight + 30;
-  y = drawWrapped(KOPUB_14_FONT_ID, y, note_.field(study::Field::Headword), 3, true);
+  const char* headwordRubySource =
+      note_.empty(study::Field::Reading) ? note_.field(study::Field::Sentence) : nullptr;
+  y = drawWrapped(KOPUB_14_FONT_ID, y, note_.field(study::Field::Headword), 3, true, 0, headwordRubySource);
   if (answer) {
     y += 15;
     renderer.drawLine(metrics.contentSidePadding, y, width - metrics.contentSidePadding, y);
@@ -508,9 +720,16 @@ void StudyActivity::drawCardScreen(const bool answer) {
     if (!note_.empty(study::Field::Sentence)) {
       y += 15;
       renderer.drawLine(metrics.contentSidePadding, y, width - metrics.contentSidePadding, y);
-      y = drawWrapped(KOPUB_14_FONT_ID, y + 18, note_.field(study::Field::Sentence), 3);
-      y = drawWrapped(UI_10_FONT_ID, y, note_.field(study::Field::SentenceReading), 2);
-      drawWrapped(UI_10_FONT_ID, y, note_.field(study::Field::SentenceMeaning), 3);
+      y += 18;
+      const int contentBottom = renderer.getScreenHeight() - metrics.buttonHintsHeight - metrics.verticalSpacing - 4;
+      const int smallLineHeight = renderer.getTextHeight(UI_10_FONT_ID) + 6;
+      const int readingReserve = note_.empty(study::Field::SentenceReading) ? 0 : smallLineHeight;
+      const int meaningReserve = note_.empty(study::Field::SentenceMeaning) ? 0 : smallLineHeight;
+      y = drawWrapped(KOPUB_14_FONT_ID, y, note_.field(study::Field::Sentence), 8, false,
+                      contentBottom - readingReserve - meaningReserve);
+      y = drawWrapped(UI_10_FONT_ID, y, note_.field(study::Field::SentenceReading), 4, false,
+                      contentBottom - meaningReserve);
+      drawWrapped(UI_10_FONT_ID, y, note_.field(study::Field::SentenceMeaning), 8, false, contentBottom);
     }
 
     char again[20], hard[20], good[20], easy[20];
