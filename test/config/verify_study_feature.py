@@ -50,6 +50,12 @@ def main() -> int:
     require(activity, "contentBottom - readingReserve - meaningReserve", "예문이 남은 화면 높이를 활용하지 않음")
 
     print("PASS: Study 덱, 스케줄, 저장, 홈 진입 및 시각 동기화 연결이 확인됐습니다.")
+    require(activity, "token.width = baseWidth", "학습 본문 폭이 원문 폭만 따르지 않음")
+    require(activity, "StudyRubyRun", "후리가나를 별도로 배치하는 오버레이 구조가 없음")
+    require(activity, "resolveStudyRubyOverlaps", "서로 겹치는 후리가나 보정이 없음")
+    require(activity, "const int preferredX = x + (baseWidth - rubyWidth) / 2", "후리가나가 원문 중앙에 배치되지 않음")
+    if "token.width = std::max(baseWidth, rubyWidth)" in activity:
+        raise AssertionError("후리가나 폭이 원문 흐름을 밀어내고 있음")
     return 0
 
 
