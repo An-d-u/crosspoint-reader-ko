@@ -914,15 +914,19 @@ void GeekNewsActivity::loop() {
     return;
   }
 
+  const bool previousPage = mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
+                            mappedInput.wasReleased(MappedInputManager::Button::Left);
+  const bool nextPage = mappedInput.wasReleased(MappedInputManager::Button::PageForward) ||
+                        mappedInput.wasReleased(MappedInputManager::Button::Right) ||
+                        mappedInput.wasReleased(MappedInputManager::Button::Confirm);
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     view_ = View::Topics;
     requestUpdate();
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Left) && currentPage_ > 0) {
+  } else if (previousPage && currentPage_ > 0) {
     --currentPage_;
     requestUpdate();
-  } else if ((mappedInput.wasReleased(MappedInputManager::Button::Right) ||
-              mappedInput.wasReleased(MappedInputManager::Button::Confirm)) &&
-             currentPage_ + 1 < pageStarts_.size()) {
+  } else if (nextPage && currentPage_ + 1 < pageStarts_.size()) {
     ++currentPage_;
     requestUpdate();
   }
