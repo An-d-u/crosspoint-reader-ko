@@ -56,6 +56,15 @@ def main() -> int:
     require(activity, "const int preferredX = x + (baseWidth - rubyWidth) / 2", "후리가나가 원문 중앙에 배치되지 않음")
     if "token.width = std::max(baseWidth, rubyWidth)" in activity:
         raise AssertionError("후리가나 폭이 원문 흐름을 밀어내고 있음")
+    require(activity, "kStudyRubyGapPx = 3", "인접한 후리가나 사이의 최소 간격이 없음")
+    require(activity, "static_cast<int64_t>(previous.blockPositionSum) * current.blockSize",
+            "후리가나 위치를 방향 편향 없이 병합하는 제약 계산이 없음")
+    require(activity, "balancedPosition + runs[index].x",
+            "후리가나 순서와 최소 간격을 보존하는 배치가 없음")
+    require(activity, "rubyRuns.reserve(rubyCount)", "후리가나 작업 메모리를 실제 후리가나 수만큼 예약하지 않음")
+    require(activity, "requiredWidth <= availableWidth", "후리가나 배치가 화면 경계를 확인하지 않음")
+    if "StudyRubyGroup" in activity or "placeStudyRubyRunsGlobally" in activity:
+        raise AssertionError("한쪽 쏠림을 만들던 휴리스틱 그룹 배치가 남아 있음")
     return 0
 
 

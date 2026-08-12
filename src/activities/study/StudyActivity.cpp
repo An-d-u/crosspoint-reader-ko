@@ -22,6 +22,7 @@ constexpr const char* kStudyRoot = "/study";
 constexpr int64_t kReasonableEpoch = 1704067200;  // 2024-01-01
 constexpr int64_t kSecondsPerDay = 86400;
 constexpr unsigned long kTimeSyncTimeoutMs = 8000;
+constexpr int kStudyRubyGapPx = 3;
 
 struct StudyTextToken {
   std::string base;
@@ -40,74 +41,58 @@ struct StudyRubyRun {
   int preferredX;
   int x;
   int width;
+  size_t blockStart = 0;
+  int blockPositionSum = 0;
+  int blockSize = 0;
 };
 
-void placeStudyRubyCluster(std::vector<StudyRubyRun>& runs, const size_t start, const size_t endExclusive) {
-  if (start >= endExclusive) return;
-  if (endExclusive - start == 1) {
-    runs[start].x = runs[start].preferredX;
-    return;
-  }
+void resolveStudyRubyOverlaps(std::vector<StudyRubyRun>& runs, const int left, const int right) {
+  if (runs.empty() || right <= left) return;
 
-  double weightedCenterSum = 0.0;
-  int totalWeight = 0;
-  int totalWidth = 0;
-  for (size_t index = start; index < endExclusive; ++index) {
-    const int weight = std::max(1, runs[index].width);
-    weightedCenterSum += (runs[index].preferredX + runs[index].width / 2.0) * weight;
-    totalWeight += weight;
-    totalWidth += runs[index].width;
-  }
-
-  const double clusterCenter = weightedCenterSum / std::max(1, totalWeight);
-  int currentX = static_cast<int>(std::lround(clusterCenter - totalWidth / 2.0));
-  for (size_t index = start; index < endExclusive; ++index) {
-    runs[index].x = currentX;
-    currentX += runs[index].width;
-  }
-}
-
-void resolveStudyRubyOverlaps(std::vector<StudyRubyRun>& runs) {
-  if (runs.size() < 2) return;
-
-  size_t clusterStart = 0;
-  while (clusterStart < runs.size()) {
-    size_t clusterEnd = clusterStart + 1;
-    int preferredRight = runs[clusterStart].preferredX + runs[clusterStart].width;
-    while (clusterEnd < runs.size() && runs[clusterEnd].preferredX < preferredRight) {
-      preferredRight = std::max(preferredRight, runs[clusterEnd].preferredX + runs[clusterEnd].width);
-      ++clusterEnd;
-    }
-    placeStudyRubyCluster(runs, clusterStart, clusterEnd);
-    clusterStart = clusterEnd;
-  }
-
-  bool merged = true;
-  while (merged) {
-    merged = false;
-    for (size_t index = 1; index < runs.size(); ++index) {
-      if (runs[index - 1].x + runs[index - 1].width <= runs[index].x) continue;
-
-      size_t overlapStart = index - 1;
-      while (overlapStart > 0 && runs[overlapStart - 1].x + runs[overlapStart - 1].width > runs[overlapStart].x) {
-        --overlapStart;
-      }
-      size_t overlapEnd = index + 1;
-      while (overlapEnd < runs.size() && runs[overlapEnd - 1].x + runs[overlapEnd - 1].width > runs[overlapEnd].x) {
-        ++overlapEnd;
-      }
-      placeStudyRubyCluster(runs, overlapStart, overlapEnd);
-      merged = true;
-      break;
-    }
-  }
-}
-
-void clampStudyRubyRuns(std::vector<StudyRubyRun>& runs, const int left, const int right) {
+  int totalRubyWidth = 0;
+  for (const auto& run : runs) totalRubyWidth += run.width;
   const int availableWidth = right - left;
-  if (availableWidth <= 0) return;
-  for (auto& run : runs) {
-    run.x = run.width >= availableWidth ? left : std::max(left, std::min(run.x, right - run.width));
+  int gap = kStudyRubyGapPx;
+  if (runs.size() > 1 && totalRubyWidth + gap * static_cast<int>(runs.size() - 1) > availableWidth) {
+    gap = std::max(0, (availableWidth - totalRubyWidth) / static_cast<int>(runs.size() - 1));
+  }
+
+  const int requiredWidth = totalRubyWidth + gap * static_cast<int>(runs.size() - 1);
+  const int lowerBound = requiredWidth <= availableWidth ? left : left - (requiredWidth - availableWidth) / 2;
+  const int upperBound = requiredWidth <= availableWidth ? right - requiredWidth : lowerBound;
+
+  size_t blockCount = 0;
+  int packedOffset = 0;
+  for (size_t index = 0; index < runs.size(); ++index) {
+    runs[index].x = packedOffset;
+    StudyRubyRun& block = runs[blockCount++];
+    block.blockStart = index;
+    block.blockPositionSum = runs[index].preferredX - packedOffset;
+    block.blockSize = 1;
+
+    while (blockCount >= 2) {
+      StudyRubyRun& previous = runs[blockCount - 2];
+      StudyRubyRun& current = runs[blockCount - 1];
+      if (static_cast<int64_t>(previous.blockPositionSum) * current.blockSize <=
+          static_cast<int64_t>(current.blockPositionSum) * previous.blockSize) {
+        break;
+      }
+      previous.blockPositionSum += current.blockPositionSum;
+      previous.blockSize += current.blockSize;
+      --blockCount;
+    }
+    packedOffset += runs[index].width + gap;
+  }
+
+  for (size_t blockIndex = 0; blockIndex < blockCount; ++blockIndex) {
+    const StudyRubyRun& block = runs[blockIndex];
+    int balancedPosition = static_cast<int>(std::lround(
+        static_cast<double>(block.blockPositionSum) / std::max(1, block.blockSize)));
+    balancedPosition = std::max(lowerBound, std::min(balancedPosition, upperBound));
+    const size_t blockEnd = block.blockStart + static_cast<size_t>(block.blockSize);
+    for (size_t index = block.blockStart; index < blockEnd; ++index) {
+      runs[index].x = balancedPosition + runs[index].x;
+    }
   }
 }
 
@@ -737,7 +722,11 @@ int StudyActivity::drawWrapped(const int fontId, const int y, const char* text, 
     const int lineRubyHeight = line.hasRuby ? renderer.getTextHeight(UI_10_FONT_ID) + 3 : 0;
     int x = (renderer.getScreenWidth() - line.width) / 2;
     std::vector<StudyRubyRun> rubyRuns;
-    if (line.hasRuby) rubyRuns.reserve(line.tokens.size());
+    if (line.hasRuby) {
+      const size_t rubyCount = static_cast<size_t>(std::count_if(
+          line.tokens.begin(), line.tokens.end(), [](const StudyTextToken& token) { return !token.ruby.empty(); }));
+      rubyRuns.reserve(rubyCount);
+    }
     for (const StudyTextToken& token : line.tokens) {
       const int baseWidth = renderer.getTextAdvanceX(fontId, token.base.c_str(), style);
       renderer.drawText(fontId, x, currentY + lineRubyHeight, token.base.c_str(), true, style);
@@ -748,8 +737,8 @@ int StudyActivity::drawWrapped(const int fontId, const int y, const char* text, 
       }
       x += token.width;
     }
-    resolveStudyRubyOverlaps(rubyRuns);
-    clampStudyRubyRuns(rubyRuns, metrics.contentSidePadding, renderer.getScreenWidth() - metrics.contentSidePadding);
+    resolveStudyRubyOverlaps(rubyRuns, metrics.contentSidePadding,
+                             renderer.getScreenWidth() - metrics.contentSidePadding);
     for (const StudyRubyRun& run : rubyRuns) {
       renderer.drawText(UI_10_FONT_ID, run.x, currentY, run.text);
     }
