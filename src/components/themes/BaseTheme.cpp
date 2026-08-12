@@ -238,14 +238,13 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                          const std::function<std::string(int index)>& rowTitle,
                          const std::function<std::string(int index)>& rowSubtitle,
                          const std::function<UIIcon(int index)>& rowIcon,
-                         const std::function<std::string(int index)>& rowValue, bool highlightValue,
-                         bool textOnly) const {
+                         const std::function<std::string(int index)>& rowValue, bool highlightValue) const {
   int rowHeight =
       (rowSubtitle != nullptr) ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
   int pageItems = rect.height / rowHeight;
 
   const int totalPages = (itemCount + pageItems - 1) / pageItems;
-  if (!textOnly && totalPages > 1) {
+  if (totalPages > 1) {
     constexpr int indicatorWidth = 20;
     constexpr int arrowSize = 6;
     constexpr int margin = 15;  // Offset from right edge
@@ -272,7 +271,7 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
   // Draw selection
   int contentWidth = rect.width - 5;
-  if (!textOnly && selectedIndex >= 0) {
+  if (selectedIndex >= 0) {
     renderer.fillRect(0, rect.y + selectedIndex % pageItems * rowHeight - 2, rect.width, rowHeight);
   }
   // Draw all items

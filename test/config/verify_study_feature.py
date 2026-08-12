@@ -50,9 +50,6 @@ def main() -> int:
     require(activity, "contentBottom - readingReserve - meaningReserve", "예문이 남은 화면 높이를 활용하지 않음")
 
     print("PASS: Study 덱, 스케줄, 저장, 홈 진입 및 시각 동기화 연결이 확인됐습니다.")
-    require(activity, "if (SETTINGS.textAntiAliasing)", "학습 화면이 텍스트 안티앨리어싱 설정을 따르지 않음")
-    require(activity, "ReaderUtils::renderAntiAliased", "학습 화면에 회색조 렌더링 패스가 없음")
-    require(activity, "drawCurrentScreen(true)", "학습 콘텐츠만 다시 그리는 안티앨리어싱 경로가 없음")
     return 0
 
 

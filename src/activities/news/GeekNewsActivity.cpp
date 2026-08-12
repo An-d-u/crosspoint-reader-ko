@@ -15,7 +15,6 @@
 #include "MappedInputManager.h"
 #include "WifiCredentialStore.h"
 #include "activities/network/WifiSelectionActivity.h"
-#include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -933,45 +932,35 @@ void GeekNewsActivity::loop() {
   }
 }
 
-void GeekNewsActivity::drawStatus(const char* message, const bool retry, const bool textOnly) {
+void GeekNewsActivity::drawStatus(const char* message, const bool retry) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  if (!textOnly) {
-    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
-                   tr(STR_GEEKNEWS));
-  }
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
+                 tr(STR_GEEKNEWS));
   renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, message, true, EpdFontFamily::BOLD);
-  if (!textOnly) {
-    const auto labels = mappedInput.mapLabels(tr(STR_HOME), retry ? tr(STR_RETRY) : "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  }
+  const auto labels = mappedInput.mapLabels(tr(STR_HOME), retry ? tr(STR_RETRY) : "", "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
-void GeekNewsActivity::drawTopics(const bool textOnly) {
+void GeekNewsActivity::drawTopics() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int pageWidth = renderer.getScreenWidth();
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
-  if (!textOnly) {
-    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_GEEKNEWS));
-  }
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_GEEKNEWS));
   GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, topics_.size(), selectedTopic_,
                [this](const int index) { return topics_[index].title; },
-               [this](const int index) { return topics_[index].subtitle; }, nullptr, nullptr, false, textOnly);
-  if (!textOnly) {
-    const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_RETRY));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  }
+               [this](const int index) { return topics_[index].subtitle; }, nullptr, nullptr);
+  const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_RETRY));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
-void GeekNewsActivity::drawArticle(const bool textOnly) {
+void GeekNewsActivity::drawArticle() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int fontId = SETTINGS.getReaderFontId();
   char pageLabel[24];
   std::snprintf(pageLabel, sizeof(pageLabel), "%zu/%zu", currentPage_ + 1, pageStarts_.size());
-  if (!textOnly) {
-    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
-                   tr(STR_GEEKNEWS), pageLabel);
-  }
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
+                 tr(STR_GEEKNEWS), pageLabel);
 
   const size_t start = pageStarts_.empty() ? 0 : pageStarts_[currentPage_];
   const size_t end = currentPage_ + 1 < pageStarts_.size() ? pageStarts_[currentPage_ + 1] : articleLines_.size();
@@ -979,10 +968,8 @@ void GeekNewsActivity::drawArticle(const bool textOnly) {
   for (size_t index = start; index < end; ++index) {
     const RichLine& line = articleLines_[index];
     if (line.rule) {
-      if (!textOnly) {
-        renderer.drawLine(metrics.contentSidePadding, y + line.height / 2,
-                          renderer.getScreenWidth() - metrics.contentSidePadding, y + line.height / 2);
-      }
+      renderer.drawLine(metrics.contentSidePadding, y + line.height / 2,
+                        renderer.getScreenWidth() - metrics.contentSidePadding, y + line.height / 2);
       y += line.height;
       continue;
     }
@@ -991,7 +978,7 @@ void GeekNewsActivity::drawArticle(const bool textOnly) {
       continue;
     }
     int x = metrics.contentSidePadding + line.indent + (line.quote ? 10 : 0);
-    if (!textOnly && line.quote) renderer.drawLine(x - 8, y, x - 8, y + line.height - 2, 2, true);
+    if (line.quote) renderer.drawLine(x - 8, y, x - 8, y + line.height - 2, 2, true);
     const size_t spanEnd = line.spanStart + line.spanCount;
     for (size_t spanIndex = line.spanStart; spanIndex < spanEnd; ++spanIndex) {
       const StoredSpan& span = articleSpans_[spanIndex];
@@ -1000,44 +987,27 @@ void GeekNewsActivity::drawArticle(const bool textOnly) {
       if (span.style == InlineStyle::Bold) style = EpdFontFamily::BOLD;
       if (span.style == InlineStyle::Italic) style = EpdFontFamily::ITALIC;
       const int width = renderer.getTextAdvanceX(fontId, text, style);
-      if (!textOnly && span.style == InlineStyle::Code) {
-        renderer.drawRect(x - 1, y - 1, width + 2, line.height - 2);
-      }
+      if (span.style == InlineStyle::Code) renderer.drawRect(x - 1, y - 1, width + 2, line.height - 2);
       renderer.drawText(fontId, x, y, text, true, style);
-      if (!textOnly && span.style == InlineStyle::Link) {
-        renderer.drawLine(x, y + line.height - 4, x + width, y + line.height - 4);
-      }
+      if (span.style == InlineStyle::Link) renderer.drawLine(x, y + line.height - 4, x + width, y + line.height - 4);
       x += width;
     }
     y += line.height;
   }
-  if (!textOnly) {
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_NEXT_PAGE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  }
-}
-
-void GeekNewsActivity::drawCurrentView(const bool textOnly) {
-  if (view_ == View::LoadingTopics || view_ == View::LoadingArticle) {
-    drawStatus(tr(STR_LOADING), false, textOnly);
-  } else if (view_ == View::Error) {
-    drawStatus(tr(STR_GEEKNEWS_LOAD_FAILED), true, textOnly);
-  } else if (view_ == View::Topics) {
-    drawTopics(textOnly);
-  } else {
-    drawArticle(textOnly);
-  }
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_NEXT_PAGE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 void GeekNewsActivity::render(RenderLock&&) {
   renderer.clearScreen();
-  drawCurrentView(false);
-  if (view_ == View::Article) {
-    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh_);
+  if (view_ == View::LoadingTopics || view_ == View::LoadingArticle) {
+    drawStatus(tr(STR_LOADING), false);
+  } else if (view_ == View::Error) {
+    drawStatus(tr(STR_GEEKNEWS_LOAD_FAILED), true);
+  } else if (view_ == View::Topics) {
+    drawTopics();
   } else {
-    renderer.displayBuffer();
+    drawArticle();
   }
-  if (SETTINGS.textAntiAliasing) {
-    ReaderUtils::renderAntiAliased(renderer, [this]() { drawCurrentView(true); });
-  }
+  renderer.displayBuffer();
 }
