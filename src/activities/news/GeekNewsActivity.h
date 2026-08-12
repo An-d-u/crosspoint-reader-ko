@@ -33,10 +33,16 @@ class GeekNewsActivity final : public Activity {
     InlineStyle style = InlineStyle::Regular;
   };
 
+  struct StoredSpan {
+    uint16_t textOffset = 0;
+    InlineStyle style = InlineStyle::Regular;
+  };
+
   struct RichLine {
-    std::vector<Span> spans;
-    int indent = 0;
-    int height = 0;
+    uint16_t spanStart = 0;
+    uint16_t spanCount = 0;
+    int16_t indent = 0;
+    int16_t height = 0;
     bool quote = false;
     bool rule = false;
   };
@@ -52,10 +58,13 @@ class GeekNewsActivity final : public Activity {
   View view_ = View::LoadingTopics;
   std::vector<Topic> topics_;
   std::vector<RichLine> articleLines_;
+  std::vector<StoredSpan> articleSpans_;
+  std::string articleText_;
   std::vector<size_t> pageStarts_;
   size_t selectedTopic_ = 0;
   size_t currentPage_ = 0;
   bool loadPending_ = false;
+  bool layoutOverflow_ = false;
   int pendingTopicId_ = 0;
   std::string articleTitle_;
   std::string sourceUrl_;
