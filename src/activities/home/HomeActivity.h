@@ -25,6 +25,7 @@ class HomeActivity final : public Activity {
   void onRecentsOpen();
   void onSettingsOpen();
   void onStudyOpen();
+  void onGeekNewsOpen();
   void onFileTransferOpen();
   void onOpdsBrowserOpen();
 

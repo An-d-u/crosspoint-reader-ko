@@ -11,6 +11,7 @@
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
+#include "news/GeekNewsActivity.h"
 #if CROSSPOINT_ENABLE_WEB_TRANSFER
 #include "network/CrossPointWebServerActivity.h"
 #endif
@@ -188,6 +189,8 @@ void ActivityManager::goToRecentBooks() {
 }
 
 void ActivityManager::goToStudy() { replaceActivity(std::make_unique<StudyActivity>(renderer, mappedInput)); }
+
+void ActivityManager::goToGeekNews() { replaceActivity(std::make_unique<GeekNewsActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToBrowser() {
 #if CROSSPOINT_ENABLE_OPDS
