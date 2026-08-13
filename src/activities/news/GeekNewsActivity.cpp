@@ -15,6 +15,7 @@
 #include "MappedInputManager.h"
 #include "WifiCredentialStore.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/reader/QrDisplayActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -485,6 +486,8 @@ void GeekNewsActivity::loadTopics() {
 }
 
 void GeekNewsActivity::loadArticle(const int topicId) {
+  articleScrapped_ = false;
+  scrapStorageError_ = false;
   std::string markdown;
   const std::string path = std::string(kTopicPathPrefix) + std::to_string(topicId) + ".md";
   if (!fetchGeekNewsArticle(path, markdown)) {
@@ -504,9 +507,71 @@ void GeekNewsActivity::loadArticle(const int topicId) {
     view_ = View::Error;
   } else {
     currentPage_ = 0;
+    if (scrapsLoaded_) articleScrapped_ = scrapStore_.findIndex(pendingTopicId_, sourceUrl_) >= 0;
     view_ = View::Article;
   }
   requestUpdate();
+}
+
+bool GeekNewsActivity::ensureScrapsLoaded() {
+  if (scrapsLoaded_) return !scrapStoreLoadFailed_;
+  scrapsLoaded_ = true;
+  scrapStoreLoadFailed_ = !scrapStore_.load();
+  scrapStorageError_ = scrapStoreLoadFailed_;
+  return !scrapStoreLoadFailed_;
+}
+
+void GeekNewsActivity::openScraps() {
+  ensureScrapsLoaded();
+  const size_t count = scrapStore_.getScraps().size();
+  selectedScrap_ = count == 0 ? 0 : std::min(selectedScrap_, count - 1);
+  view_ = View::Scraps;
+  requestUpdate();
+}
+
+void GeekNewsActivity::openSelectedScrap() {
+  const auto& scraps = scrapStore_.getScraps();
+  if (selectedScrap_ >= scraps.size()) return;
+  const GeekNewsScrap& scrap = scraps[selectedScrap_];
+  pendingTopicId_ = scrap.topicId;
+  articleTitle_ = scrap.title;
+  articleBackView_ = View::Scraps;
+  view_ = View::LoadingArticle;
+  loadPending_ = true;
+  requestUpdate();
+}
+
+void GeekNewsActivity::showSelectedScrapQr() {
+  const auto& scraps = scrapStore_.getScraps();
+  if (selectedScrap_ >= scraps.size()) return;
+  startActivityForResult(std::make_unique<QrDisplayActivity>(renderer, mappedInput, scraps[selectedScrap_].url),
+                         [](const ActivityResult&) {});
+}
+
+void GeekNewsActivity::scrapArticle() {
+  if (pendingTopicId_ <= 0 || articleTitle_.empty() || !ensureScrapsLoaded()) {
+    scrapStorageError_ = true;
+    requestUpdate();
+    return;
+  }
+
+  const GeekNewsScrapStore::AddResult result =
+      scrapStore_.add(GeekNewsScrap{pendingTopicId_, articleTitle_, GeekNewsScrapStore::topicUrl(pendingTopicId_)});
+  articleScrapped_ = result != GeekNewsScrapStore::AddResult::Failed;
+  scrapStorageError_ = result == GeekNewsScrapStore::AddResult::Failed;
+  requestUpdate();
+}
+
+void GeekNewsActivity::deleteSelectedScrap() {
+  const size_t count = scrapStore_.getScraps().size();
+  if (selectedScrap_ >= count) return;
+  scrapStorageError_ = !scrapStore_.removeAt(selectedScrap_);
+  const size_t remaining = scrapStore_.getScraps().size();
+  if (remaining == 0) {
+    selectedScrap_ = 0;
+  } else if (selectedScrap_ >= remaining) {
+    selectedScrap_ = remaining - 1;
+  }
 }
 
 void GeekNewsActivity::retryLoad() {
@@ -881,9 +946,14 @@ void GeekNewsActivity::loop() {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && selectedTopic_ < topics_.size()) {
       pendingTopicId_ = topics_[selectedTopic_].id;
       articleTitle_ = topics_[selectedTopic_].title;
+      articleBackView_ = View::Topics;
       view_ = View::LoadingArticle;
       loadPending_ = true;
       requestUpdate();
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+      openScraps();
       return;
     }
     if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
@@ -914,15 +984,72 @@ void GeekNewsActivity::loop() {
     return;
   }
 
+  if (view_ == View::Scraps) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      view_ = View::Topics;
+      requestUpdate();
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) &&
+        selectedScrap_ < scrapStore_.getScraps().size()) {
+      view_ = View::ConfirmDelete;
+      requestUpdate();
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+      openSelectedScrap();
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      showSelectedScrapQr();
+      return;
+    }
+    const int count = static_cast<int>(scrapStore_.getScraps().size());
+    if (count == 0) return;
+    const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true,
+                                                                         scrapStorageError_ ? 28 : 0);
+    buttonNavigator_.onRelease({MappedInputManager::Button::Down}, [this, count] {
+      selectedScrap_ = ButtonNavigator::nextIndex(static_cast<int>(selectedScrap_), count);
+      requestUpdate();
+    });
+    buttonNavigator_.onRelease({MappedInputManager::Button::Up}, [this, count] {
+      selectedScrap_ = ButtonNavigator::previousIndex(static_cast<int>(selectedScrap_), count);
+      requestUpdate();
+    });
+    buttonNavigator_.onContinuous({MappedInputManager::Button::Down}, [this, count, pageItems] {
+      selectedScrap_ = ButtonNavigator::nextPageIndex(static_cast<int>(selectedScrap_), count, pageItems);
+      requestUpdate();
+    });
+    buttonNavigator_.onContinuous({MappedInputManager::Button::Up}, [this, count, pageItems] {
+      selectedScrap_ = ButtonNavigator::previousPageIndex(static_cast<int>(selectedScrap_), count, pageItems);
+      requestUpdate();
+    });
+    return;
+  }
+
+  if (view_ == View::ConfirmDelete) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      deleteSelectedScrap();
+      view_ = View::Scraps;
+      requestUpdate();
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+               mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      view_ = View::Scraps;
+      requestUpdate();
+    }
+    return;
+  }
+
   const bool previousPage = mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
                             mappedInput.wasReleased(MappedInputManager::Button::Left);
   const bool nextPage = mappedInput.wasReleased(MappedInputManager::Button::PageForward) ||
-                        mappedInput.wasReleased(MappedInputManager::Button::Right) ||
-                        mappedInput.wasReleased(MappedInputManager::Button::Confirm);
+                        mappedInput.wasReleased(MappedInputManager::Button::Right);
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    view_ = View::Topics;
+    view_ = articleBackView_;
     requestUpdate();
+  } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    scrapArticle();
   } else if (previousPage && currentPage_ > 0) {
     --currentPage_;
     requestUpdate();
@@ -950,7 +1077,7 @@ void GeekNewsActivity::drawTopics() {
   GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, topics_.size(), selectedTopic_,
                [this](const int index) { return topics_[index].title; },
                [this](const int index) { return topics_[index].subtitle; }, nullptr, nullptr);
-  const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_RETRY));
+  const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_GEEKNEWS_SCRAPS), tr(STR_RETRY));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
@@ -994,7 +1121,48 @@ void GeekNewsActivity::drawArticle() {
     }
     y += line.height;
   }
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_NEXT_PAGE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  const char* scrapLabel = scrapStorageError_ ? tr(STR_GEEKNEWS_SCRAP_FAILED)
+                                              : (articleScrapped_ ? tr(STR_GEEKNEWS_SCRAPPED)
+                                                                  : tr(STR_GEEKNEWS_SCRAP));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), scrapLabel, tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
+
+void GeekNewsActivity::drawScraps() {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int pageWidth = renderer.getScreenWidth();
+  int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  int contentHeight = renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_GEEKNEWS_SCRAPS));
+
+  if (scrapStorageError_) {
+    renderer.drawCenteredText(UI_10_FONT_ID, contentTop, tr(STR_GEEKNEWS_SCRAP_STORAGE_ERROR));
+    contentTop += 28;
+    contentHeight -= 28;
+  }
+
+  const auto& scraps = scrapStore_.getScraps();
+  if (scraps.empty()) {
+    renderer.drawCenteredText(UI_10_FONT_ID, contentTop + contentHeight / 2, tr(STR_GEEKNEWS_NO_SCRAPS), true,
+                              EpdFontFamily::BOLD);
+  } else {
+    GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, scraps.size(), selectedScrap_,
+                 [&scraps](const int index) { return scraps[index].title; },
+                 [&scraps](const int index) { return scraps[index].url; }, nullptr, nullptr);
+  }
+
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), scraps.empty() ? "" : tr(STR_DELETE),
+                                             scraps.empty() ? "" : tr(STR_OPEN), scraps.empty() ? "" : "QR");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
+
+void GeekNewsActivity::drawDeleteConfirmation() {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
+                 tr(STR_GEEKNEWS_SCRAPS));
+  renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2 - 15,
+                            tr(STR_GEEKNEWS_DELETE_SCRAP_CONFIRM), true, EpdFontFamily::BOLD);
+  const auto labels = mappedInput.mapLabels("", "", tr(STR_NO), tr(STR_YES));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
@@ -1006,6 +1174,10 @@ void GeekNewsActivity::render(RenderLock&&) {
     drawStatus(tr(STR_GEEKNEWS_LOAD_FAILED), true);
   } else if (view_ == View::Topics) {
     drawTopics();
+  } else if (view_ == View::Scraps) {
+    drawScraps();
+  } else if (view_ == View::ConfirmDelete) {
+    drawDeleteConfirmation();
   } else {
     drawArticle();
   }

@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "GeekNewsScrapStore.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
@@ -19,7 +20,7 @@ class GeekNewsActivity final : public Activity {
   bool preventAutoSleep() override { return true; }
 
  private:
-  enum class View : uint8_t { LoadingTopics, Topics, LoadingArticle, Article, Error };
+  enum class View : uint8_t { LoadingTopics, Topics, LoadingArticle, Article, Scraps, ConfirmDelete, Error };
   enum class InlineStyle : uint8_t { Regular, Bold, Italic, Code, Link };
 
   struct Topic {
@@ -55,6 +56,7 @@ class GeekNewsActivity final : public Activity {
   static constexpr int kMaxTopics = 20;
 
   ButtonNavigator buttonNavigator_;
+  GeekNewsScrapStore scrapStore_;
   View view_ = View::LoadingTopics;
   std::vector<Topic> topics_;
   std::vector<RichLine> articleLines_;
@@ -62,10 +64,16 @@ class GeekNewsActivity final : public Activity {
   std::string articleText_;
   std::vector<size_t> pageStarts_;
   size_t selectedTopic_ = 0;
+  size_t selectedScrap_ = 0;
   size_t currentPage_ = 0;
   bool loadPending_ = false;
   bool layoutOverflow_ = false;
+  bool scrapsLoaded_ = false;
+  bool scrapStoreLoadFailed_ = false;
+  bool scrapStorageError_ = false;
+  bool articleScrapped_ = false;
   int pendingTopicId_ = 0;
+  View articleBackView_ = View::Topics;
   std::string articleTitle_;
   std::string sourceUrl_;
 
@@ -74,6 +82,12 @@ class GeekNewsActivity final : public Activity {
   void loadTopics();
   void loadArticle(int topicId);
   void retryLoad();
+  bool ensureScrapsLoaded();
+  void openScraps();
+  void openSelectedScrap();
+  void showSelectedScrapQr();
+  void scrapArticle();
+  void deleteSelectedScrap();
   void layoutMarkdown(const std::string& markdown);
   void appendMarkdownBlock(const std::string& text, const std::string& prefix, int indent, bool quote,
                            bool codeBlock, int spacingAfter);
@@ -82,6 +96,8 @@ class GeekNewsActivity final : public Activity {
   void rebuildPageStarts();
   void drawTopics();
   void drawArticle();
+  void drawScraps();
+  void drawDeleteConfirmation();
   void drawStatus(const char* message, bool retry);
 
   static bool receiveFeedChunk(void* context, const uint8_t* data, size_t length);
