@@ -190,7 +190,7 @@ void ActivityManager::goToRecentBooks() {
 
 void ActivityManager::goToStudy() { replaceActivity(std::make_unique<StudyActivity>(renderer, mappedInput)); }
 
-void ActivityManager::goToGeekNews() { replaceActivity(std::make_unique<GeekNewsActivity>(renderer, mappedInput)); }
+void ActivityManager::goToFeed() { replaceActivity(std::make_unique<GeekNewsActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToBrowser() {
 #if CROSSPOINT_ENABLE_OPDS

@@ -27,7 +27,8 @@ def main() -> int:
     require(header, "GeekNewsScrapStore scrapStore_", "스크랩 저장소가 GeekNews 화면에 연결되지 않음")
 
     require(activity, "openScraps();", "메인 화면에서 스크랩 목록으로 이동하지 않음")
-    require(activity, "tr(STR_GEEKNEWS_SCRAPS), tr(STR_RETRY)", "메인 화면의 위 버튼이 스크랩 목록이 아님")
+    require(activity, "source_ == FeedSource::GeekNews ? tr(STR_GEEKNEWS_SCRAPS) : \"\"",
+            "GeekNews 목록의 위 버튼이 스크랩 목록이 아님")
     require(activity, "scrapArticle();", "본문의 확인 버튼이 스크랩을 저장하지 않음")
     require(activity, "tr(STR_GEEKNEWS_SCRAP)", "본문에 스크랩 버튼이 없음")
     require(activity, "tr(STR_BACK), scraps.empty() ? \"\" : tr(STR_DELETE)",

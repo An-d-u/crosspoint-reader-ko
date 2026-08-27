@@ -11,7 +11,7 @@
 class GeekNewsActivity final : public Activity {
  public:
   explicit GeekNewsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("GeekNews", renderer, mappedInput) {}
+      : Activity("Feed", renderer, mappedInput) {}
 
   void onEnter() override;
   void onExit() override;
@@ -20,13 +20,16 @@ class GeekNewsActivity final : public Activity {
   bool preventAutoSleep() override { return true; }
 
  private:
-  enum class View : uint8_t { LoadingTopics, Topics, LoadingArticle, Article, Scraps, ConfirmDelete, Error };
+  enum class View : uint8_t { Sources, LoadingTopics, Topics, LoadingArticle, Article, Scraps, ConfirmDelete, Error };
+  enum class FeedSource : uint8_t { GeekNews, HackerNews };
   enum class InlineStyle : uint8_t { Regular, Bold, Italic, Code, Link };
 
   struct Topic {
     int id = 0;
     std::string title;
     std::string subtitle;
+    std::string url;
+    std::string text;
   };
 
   struct Span {
@@ -57,7 +60,8 @@ class GeekNewsActivity final : public Activity {
 
   ButtonNavigator buttonNavigator_;
   GeekNewsScrapStore scrapStore_;
-  View view_ = View::LoadingTopics;
+  View view_ = View::Sources;
+  FeedSource source_ = FeedSource::GeekNews;
   std::vector<Topic> topics_;
   std::vector<RichLine> articleLines_;
   std::vector<StoredSpan> articleSpans_;
@@ -80,7 +84,11 @@ class GeekNewsActivity final : public Activity {
   void connectWifi();
   void disconnectWifi();
   void loadTopics();
+  void loadGeekNewsTopics();
+  void loadHackerNewsTopics();
   void loadArticle(int topicId);
+  bool loadGeekNewsArticle(int topicId);
+  bool loadHackerNewsArticle(int topicId);
   void retryLoad();
   bool ensureScrapsLoaded();
   void openScraps();
@@ -88,21 +96,25 @@ class GeekNewsActivity final : public Activity {
   void showSelectedScrapQr();
   void scrapArticle();
   void deleteSelectedScrap();
-  void layoutMarkdown(const std::string& markdown);
+  void showArticleQr();
+  void layoutMarkdown(const std::string& markdown, const std::string& explicitSourceUrl = {});
   void appendMarkdownBlock(const std::string& text, const std::string& prefix, int indent, bool quote,
                            bool codeBlock, int spacingAfter);
   void appendWrappedSpans(const std::vector<Span>& spans, const std::string& prefix, int indent, bool quote,
                           int spacingAfter);
   void rebuildPageStarts();
+  void drawSources();
   void drawTopics();
   void drawArticle();
   void drawScraps();
   void drawDeleteConfirmation();
   void drawStatus(const char* message, bool retry);
+  const char* sourceName() const;
 
   static bool receiveFeedChunk(void* context, const uint8_t* data, size_t length);
   static bool parseFeedEntry(const std::string& entry, Topic& topic);
   static std::vector<Span> parseInline(const std::string& text, bool codeBlock = false);
+  static std::string hackerNewsHtmlToMarkdown(const std::string& html);
   static std::string decodeEntities(const std::string& text);
   static std::string trim(const std::string& text);
 };

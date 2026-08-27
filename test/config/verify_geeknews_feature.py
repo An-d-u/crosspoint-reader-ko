@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GeekNews 목록, Markdown 본문, 홈 메뉴 및 네트워크 연결을 검증한다."""
+"""피드 선택, GeekNews/Hacker News 목록·본문 및 네트워크 연결을 검증한다."""
 
 from pathlib import Path
 import sys
@@ -28,9 +28,15 @@ def main() -> int:
     require(platformio, "-UENABLE_SERIAL_LOG", "default 빌드가 직렬 로그로 이미지 한도를 초과할 수 있음")
     require(size_guard, "8 * 1024 * 1024", "ESP32-C3 앱 이미지 한도 값이 없음")
     require(size_guard, "raise RuntimeError", "앱 이미지 한도 초과 시 빌드를 차단하지 않음")
-    require(home, "tr(STR_GEEKNEWS)", "홈 화면에 GeekNews 메뉴가 없음")
-    require(home, "onGeekNewsOpen()", "홈 화면 GeekNews 진입점이 없음")
-    require(manager, "std::make_unique<GeekNewsActivity>", "ActivityManager가 GeekNews 화면을 만들지 않음")
+    require(home, "tr(STR_FEEDS)", "홈 화면에 피드 메뉴가 없음")
+    require(home, "onFeedOpen()", "홈 화면 피드 진입점이 없음")
+    require(manager, "goToFeed()", "ActivityManager에 피드 진입점이 없음")
+    require(manager, "std::make_unique<GeekNewsActivity>", "ActivityManager가 피드 화면을 만들지 않음")
+
+    require(activity_h, "View::", "피드 화면 상태가 정의되지 않음")
+    require(activity_h, "Sources", "피드 소스 선택 화면이 없음")
+    require(activity_h, "FeedSource", "피드 소스 구분이 없음")
+    require(activity, "drawSources()", "GeekNews와 Hacker News 선택 화면이 없음")
 
     require(activity, 'kHost = "news.hada.io"', "GeekNews 공식 호스트를 사용하지 않음")
     require(activity, 'kFeedPath = "/rss/news"', "공식 Atom 피드를 사용하지 않음")
@@ -65,6 +71,17 @@ def main() -> int:
     require(activity, "std::make_unique<WifiSelectionActivity>", "저장된 Wi-Fi 자동 연결이 없음")
     require(activity, "WiFi.mode(WIFI_OFF)", "화면 종료 시 Wi-Fi를 끄지 않음")
 
+    require(activity, 'kHackerNewsHost = "hn.algolia.com"', "Hacker News 목록 API 호스트가 없음")
+    require(activity, 'tags=front_page&hitsPerPage=20', "Hacker News 전면 목록을 한 번에 요청하지 않음")
+    require(activity, 'kExtractorHost = "r.jina.ai"', "외부 기사 Markdown 추출 경로가 없음")
+    require(activity, "kHackerNewsTempPath", "Hacker News 목록을 TLS 버퍼와 분리해 저장하지 않음")
+    require(activity, "DeserializationOption::Filter", "Hacker News JSON 필드 필터가 없음")
+    require(activity, "kMaxHackerNewsFeedBytes", "Hacker News 목록 응답 크기 제한이 없음")
+    require(activity, "receiveBoundedChunk", "Hacker News 본문 크기 제한이 없음")
+    require(activity, "hackerNewsHtmlToMarkdown", "Hacker News 자체 글 HTML 처리가 없음")
+    require(activity, '"https://news.ycombinator.com/item?id="', "Hacker News 자체 글 원문 주소가 없음")
+    require(activity, "showArticleQr()", "Hacker News 원문 QR 열기가 없음")
+
     for token, description in [
         ("InlineStyle::Bold", "굵게 렌더링이 없음"),
         ("InlineStyle::Italic", "기울임 렌더링이 없음"),
@@ -78,7 +95,7 @@ def main() -> int:
     ]:
         require(activity, token, description)
 
-    print("PASS: GeekNews Atom 목록, Markdown 본문, 페이지 읽기 및 Wi-Fi 연결을 확인했습니다.")
+    print("PASS: 피드 선택, GeekNews/Hacker News 목록·본문, 페이지 읽기 및 Wi-Fi 연결을 확인했습니다.")
     return 0
 
 

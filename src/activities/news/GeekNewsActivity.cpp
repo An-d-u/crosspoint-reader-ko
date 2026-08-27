@@ -1,5 +1,7 @@
 #include "GeekNewsActivity.h"
 
+#include <ArduinoJson.h>
+#include <HalStorage.h>
 #include <I18n.h>
 #include <NetworkClientSecure.h>
 #include <WiFi.h>
@@ -21,15 +23,21 @@
 
 namespace {
 constexpr const char* kHost = "news.hada.io";
+constexpr const char* kHackerNewsHost = "hn.algolia.com";
+constexpr const char* kHackerNewsFeedPath = "/api/v1/search?tags=front_page&hitsPerPage=20";
+constexpr const char* kExtractorHost = "r.jina.ai";
 constexpr const char* kFeedPath = "/rss/news";
 constexpr const char* kTopicPathPrefix = "/topic/";
+constexpr const char* kHackerNewsTempPath = "/.crosspoint/hackernews_front.tmp";
 constexpr size_t kMaxArticleBytes = 48 * 1024;
+constexpr size_t kMaxHackerNewsFeedBytes = 48 * 1024;
 constexpr size_t kMaxArticleLineBytes = 4 * 1024;
 constexpr size_t kInitialArticleReserve = 8 * 1024;
 constexpr size_t kMaxLayoutLines = 512;
 constexpr size_t kMaxLayoutSpans = 1024;
 constexpr size_t kMaxFeedEntryBytes = 16 * 1024;
 constexpr uint32_t kNetworkTimeoutMs = 15000;
+constexpr uint32_t kExtractorTimeoutMs = 30000;
 constexpr uint32_t kWifiConnectTimeoutMs = 15000;
 constexpr int kNetworkAttempts = 3;
 constexpr int kDnsAttempts = 4;
@@ -73,14 +81,16 @@ bool waitForWifi() {
   return connected;
 }
 
-bool resolveGeekNewsHost(IPAddress& address) {
+bool resolveHost(const char* host, IPAddress& address) {
   for (int attempt = 0; attempt < kDnsAttempts; ++attempt) {
     if (!waitForWifi()) return false;
-    if (WiFi.hostByName(kHost, address) == 1 && static_cast<uint32_t>(address) != 0) return true;
+    if (WiFi.hostByName(host, address) == 1 && static_cast<uint32_t>(address) != 0) return true;
     delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
   }
   return false;
 }
+
+bool resolveGeekNewsHost(IPAddress& address) { return resolveHost(kHost, address); }
 
 bool readResponseBytes(NetworkClientSecure& client, size_t byteCount, void* context, ResponseWriter writer) {
   uint8_t buffer[512];
@@ -94,24 +104,25 @@ bool readResponseBytes(NetworkClientSecure& client, size_t byteCount, void* cont
   return true;
 }
 
-bool fetchGeekNews(const std::string& path, void* context, ResponseWriter writer) {
+bool fetchHttps(const char* host, const std::string& path, const char* accept, void* context, ResponseWriter writer,
+                const uint32_t timeoutMs = kNetworkTimeoutMs) {
   IPAddress address;
-  if (!resolveGeekNewsHost(address)) return false;
+  if (!(std::string_view(host) == kHost ? resolveGeekNewsHost(address) : resolveHost(host, address))) return false;
   NetworkClientSecure client;
   // 공개 읽기 전용 콘텐츠이며, 전체 CA 번들은 ESP32-C3의 DROM 한도를 초과한다.
   client.setInsecure();
-  client.setTimeout(kNetworkTimeoutMs);
+  client.setTimeout(timeoutMs);
   // DNS를 먼저 확인해 연결 직후의 일시적인 이름 해석 실패를 분리하되,
   // TLS SNI가 유지되도록 실제 연결에는 호스트 이름을 사용한다.
-  if (!client.connect(kHost, 443, static_cast<int32_t>(kNetworkTimeoutMs))) return false;
+  if (!client.connect(host, 443, static_cast<int32_t>(timeoutMs))) return false;
 
   client.print("GET ");
   client.print(path.c_str());
   client.print(" HTTP/1.1\r\nHost: ");
-  client.print(kHost);
-  client.print("\r\nUser-Agent: CrossPoint/1.0 (+https://github.com/An-d-u/crosspoint-reader-ko)"
-               "\r\nAccept: text/markdown, application/atom+xml, text/plain;q=0.9"
-               "\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n");
+  client.print(host);
+  client.print("\r\nUser-Agent: CrossPoint/1.0 (+https://github.com/An-d-u/crosspoint-reader-ko)\r\nAccept: ");
+  client.print(accept);
+  client.print("\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n");
 
   String line = client.readStringUntil('\n');
   line.trim();
@@ -155,7 +166,7 @@ bool fetchGeekNews(const std::string& path, void* context, ResponseWriter writer
   while (client.connected() || client.available() > 0) {
     const int available = client.available();
     if (available <= 0) {
-      if (millis() - lastReceivedAt > kNetworkTimeoutMs) return false;
+      if (millis() - lastReceivedAt > timeoutMs) return false;
       delay(5);
       continue;
     }
@@ -165,6 +176,46 @@ bool fetchGeekNews(const std::string& path, void* context, ResponseWriter writer
     if (!writer(context, buffer, static_cast<size_t>(received))) return false;
     lastReceivedAt = millis();
   }
+  return true;
+}
+
+bool fetchGeekNews(const std::string& path, void* context, ResponseWriter writer) {
+  return fetchHttps(kHost, path, "text/markdown, application/atom+xml, text/plain;q=0.9", context, writer);
+}
+
+struct FileResponseContext {
+  HalFile* file = nullptr;
+  size_t received = 0;
+  size_t limit = 0;
+};
+
+bool receiveFileChunk(void* rawContext, const uint8_t* data, const size_t length) {
+  auto& context = *static_cast<FileResponseContext*>(rawContext);
+  if (context.received > context.limit || length > context.limit - context.received) return false;
+  if (context.file->write(data, length) != length) return false;
+  context.received += length;
+  return true;
+}
+
+struct BoundedResponseContext {
+  std::string* output = nullptr;
+  size_t limit = 0;
+  bool tooLarge = false;
+};
+
+bool receiveBoundedChunk(void* rawContext, const uint8_t* data, const size_t length) {
+  auto& context = *static_cast<BoundedResponseContext*>(rawContext);
+  if (context.output->size() > context.limit || length > context.limit - context.output->size()) {
+    context.tooLarge = true;
+    return false;
+  }
+  const size_t required = context.output->size() + length;
+  if (required > context.output->capacity()) {
+    const size_t capacity = std::min(context.limit, std::max(required, context.output->capacity() * 2));
+    if (!hasAllocationRoom(capacity + 1)) return false;
+    context.output->reserve(capacity);
+  }
+  context.output->append(reinterpret_cast<const char*>(data), length);
   return true;
 }
 
@@ -304,11 +355,39 @@ size_t utf8CharBytes(const unsigned char first) {
   if ((first & 0xF8) == 0xF0) return 4;
   return 1;
 }
+
+bool endsWithFold(const std::string_view text, const std::string_view suffix) {
+  if (text.size() < suffix.size()) return false;
+  const size_t start = text.size() - suffix.size();
+  for (size_t index = 0; index < suffix.size(); ++index) {
+    if (std::tolower(static_cast<unsigned char>(text[start + index])) !=
+        std::tolower(static_cast<unsigned char>(suffix[index]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool hackerNewsUrlCanBeArticle(std::string_view url) {
+  const size_t cut = url.find_first_of("?#");
+  if (cut != std::string_view::npos) url = url.substr(0, cut);
+  static constexpr std::string_view suffixes[] = {".pdf", ".zip", ".gz",  ".mp3", ".mp4", ".png",
+                                                  ".jpg", ".jpeg", ".gif", ".svg", ".webp"};
+  return std::none_of(std::begin(suffixes), std::end(suffixes),
+                      [url](const std::string_view suffix) { return endsWithFold(url, suffix); });
+}
+
+void splitExtractorResponse(std::string& response) {
+  static constexpr std::string_view marker = "Markdown Content:";
+  const size_t bodyStart = response.find(marker);
+  if (bodyStart != std::string::npos) response.erase(0, bodyStart + marker.size());
+}
 }  // namespace
 
 void GeekNewsActivity::onEnter() {
   Activity::onEnter();
-  connectWifi();
+  view_ = View::Sources;
+  requestUpdate();
 }
 
 void GeekNewsActivity::onExit() {
@@ -322,10 +401,18 @@ void GeekNewsActivity::onExit() {
 }
 
 void GeekNewsActivity::connectWifi() {
+  if (WiFi.status() == WL_CONNECTED && static_cast<uint32_t>(WiFi.localIP()) != 0) {
+    WiFi.setSleep(false);
+    view_ = View::LoadingTopics;
+    loadPending_ = true;
+    requestUpdate();
+    return;
+  }
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) {
                            if (result.isCancelled || WiFi.status() != WL_CONNECTED) {
-                             onGoHome();
+                             view_ = View::Sources;
+                             requestUpdate();
                              return;
                            }
                            WiFi.setSleep(false);
@@ -404,6 +491,41 @@ std::string GeekNewsActivity::decodeEntities(const std::string& text) {
   return output;
 }
 
+std::string GeekNewsActivity::hackerNewsHtmlToMarkdown(const std::string& html) {
+  std::string output;
+  output.reserve(html.size());
+  for (size_t index = 0; index < html.size();) {
+    if (html[index] != '<') {
+      output.push_back(html[index++]);
+      continue;
+    }
+    const size_t close = html.find('>', index + 1);
+    if (close == std::string::npos) {
+      output.push_back(html[index++]);
+      continue;
+    }
+    std::string tag;
+    for (size_t cursor = index + 1; cursor < close; ++cursor) {
+      const char value = html[cursor];
+      if (std::isspace(static_cast<unsigned char>(value))) break;
+      tag.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(value))));
+    }
+    if (tag == "p" || tag == "/p") {
+      output += "\n\n";
+    } else if (tag == "br" || tag == "br/") {
+      output.push_back('\n');
+    } else if (tag == "pre") {
+      output += "\n\n```\n";
+    } else if (tag == "/pre") {
+      output += "\n```\n\n";
+    } else if (tag == "code" || tag == "/code") {
+      output.push_back('`');
+    }
+    index = close + 1;
+  }
+  return decodeEntities(output);
+}
+
 bool GeekNewsActivity::parseFeedEntry(const std::string& entry, Topic& topic) {
   const size_t topicMarker = entry.find("topic?id=");
   if (topicMarker == std::string::npos) return false;
@@ -464,6 +586,14 @@ bool GeekNewsActivity::receiveFeedChunk(void* rawContext, const uint8_t* data, c
 }
 
 void GeekNewsActivity::loadTopics() {
+  if (source_ == FeedSource::HackerNews) {
+    loadHackerNewsTopics();
+  } else {
+    loadGeekNewsTopics();
+  }
+}
+
+void GeekNewsActivity::loadGeekNewsTopics() {
   bool loaded = false;
   for (int attempt = 0; attempt < kNetworkAttempts; ++attempt) {
     topics_.clear();
@@ -485,12 +615,139 @@ void GeekNewsActivity::loadTopics() {
   requestUpdate();
 }
 
+void GeekNewsActivity::loadHackerNewsTopics() {
+  bool loaded = false;
+  Storage.mkdir("/.crosspoint");
+  for (int attempt = 0; attempt < kNetworkAttempts && !loaded; ++attempt) {
+    topics_.clear();
+    Storage.remove(kHackerNewsTempPath);
+    HalFile output = Storage.open(kHackerNewsTempPath, O_WRITE | O_CREAT | O_TRUNC);
+    if (!output) break;
+    FileResponseContext context{&output, 0, kMaxHackerNewsFeedBytes};
+    const bool fetched = fetchHttps(kHackerNewsHost, kHackerNewsFeedPath, "application/json", &context,
+                                    receiveFileChunk);
+    output.flush();
+    const bool closed = output.close();
+    if (!fetched || !closed || context.received == 0) {
+      Storage.remove(kHackerNewsTempPath);
+      if (attempt + 1 < kNetworkAttempts) delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
+      continue;
+    }
+
+    HalFile input = Storage.open(kHackerNewsTempPath, O_RDONLY);
+    if (!input) {
+      Storage.remove(kHackerNewsTempPath);
+      break;
+    }
+    JsonDocument filter;
+    filter["hits"][0]["objectID"] = true;
+    filter["hits"][0]["title"] = true;
+    filter["hits"][0]["url"] = true;
+    filter["hits"][0]["author"] = true;
+    filter["hits"][0]["points"] = true;
+    filter["hits"][0]["num_comments"] = true;
+    filter["hits"][0]["story_text"] = true;
+    JsonDocument document;
+    const DeserializationError error =
+        deserializeJson(document, input, DeserializationOption::Filter(filter));
+    input.close();
+    Storage.remove(kHackerNewsTempPath);
+    if (error) {
+      if (attempt + 1 < kNetworkAttempts) delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
+      continue;
+    }
+
+    const JsonArrayConst hits = document["hits"].as<JsonArrayConst>();
+    topics_.reserve(kMaxTopics);
+    for (const JsonObjectConst hit : hits) {
+      if (topics_.size() >= kMaxTopics) break;
+      Topic topic;
+      topic.id = std::atoi(hit["objectID"] | "0");
+      topic.title = hit["title"] | "";
+      if (topic.id <= 0 || topic.title.empty()) continue;
+      topic.url = hit["url"] | "";
+      topic.text = hit["story_text"] | "";
+      const char* author = hit["author"] | "";
+      const int points = hit["points"] | 0;
+      const int comments = hit["num_comments"] | 0;
+      char subtitle[112];
+      std::snprintf(subtitle, sizeof(subtitle), "%dp · %dc%s%s", points, comments, *author == '\0' ? "" : " · ",
+                    author);
+      topic.subtitle = subtitle;
+      topics_.push_back(std::move(topic));
+    }
+    loaded = !topics_.empty();
+  }
+
+  if (!loaded) {
+    topics_.clear();
+    view_ = View::Error;
+    requestUpdate();
+    return;
+  }
+  selectedTopic_ = 0;
+  view_ = View::Topics;
+  requestUpdate();
+}
+
+bool GeekNewsActivity::loadGeekNewsArticle(const int topicId) {
+  std::string markdown;
+  const std::string path = std::string(kTopicPathPrefix) + std::to_string(topicId) + ".md";
+  if (!fetchGeekNewsArticle(path, markdown)) return false;
+  layoutMarkdown(markdown);
+  return !layoutOverflow_ && !articleLines_.empty();
+}
+
+bool GeekNewsActivity::loadHackerNewsArticle(const int topicId) {
+  const auto found = std::find_if(topics_.begin(), topics_.end(), [topicId](const Topic& topic) {
+    return topic.id == topicId;
+  });
+  if (found == topics_.end()) return false;
+
+  const std::string discussionUrl =
+      std::string("https://news.ycombinator.com/item?id=") + std::to_string(topicId);
+  if (found->url.empty()) {
+    std::string markdown = hackerNewsHtmlToMarkdown(found->text);
+    if (trim(markdown).empty()) markdown = tr(STR_HACKERNEWS_ARTICLE_UNAVAILABLE);
+    layoutMarkdown(markdown, discussionUrl);
+    return !layoutOverflow_ && !articleLines_.empty();
+  }
+
+  if (!hackerNewsUrlCanBeArticle(found->url)) {
+    layoutMarkdown(tr(STR_HACKERNEWS_ARTICLE_UNAVAILABLE), found->url);
+    return !layoutOverflow_ && !articleLines_.empty();
+  }
+
+  std::string markdown;
+  if (!hasAllocationRoom(kInitialArticleReserve + 1)) return false;
+  markdown.reserve(kInitialArticleReserve);
+  bool fetched = false;
+  bool tooLarge = false;
+  for (int attempt = 0; attempt < kNetworkAttempts; ++attempt) {
+    markdown.clear();
+    BoundedResponseContext context{&markdown, kMaxArticleBytes, false};
+    const std::string path = "/" + found->url;
+    fetched = fetchHttps(kExtractorHost, path, "text/markdown, text/plain;q=0.9", &context, receiveBoundedChunk,
+                         kExtractorTimeoutMs);
+    if (fetched && !markdown.empty()) break;
+    tooLarge = context.tooLarge;
+    if (tooLarge) break;
+    if (attempt + 1 < kNetworkAttempts) delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
+  }
+  if (!fetched && !tooLarge) return false;
+
+  splitExtractorResponse(markdown);
+  if (tooLarge || trim(markdown).empty()) markdown = tr(STR_HACKERNEWS_ARTICLE_UNAVAILABLE);
+  layoutMarkdown(markdown, found->url);
+  return !layoutOverflow_ && !articleLines_.empty();
+}
+
 void GeekNewsActivity::loadArticle(const int topicId) {
   articleScrapped_ = false;
   scrapStorageError_ = false;
-  std::string markdown;
-  const std::string path = std::string(kTopicPathPrefix) + std::to_string(topicId) + ".md";
-  if (!fetchGeekNewsArticle(path, markdown)) {
+  const bool loaded = source_ == FeedSource::HackerNews ? loadHackerNewsArticle(topicId)
+                                                        : loadGeekNewsArticle(topicId);
+  if (!loaded) {
     view_ = View::Error;
     requestUpdate();
     return;
@@ -502,14 +759,11 @@ void GeekNewsActivity::loadArticle(const int topicId) {
     WiFi.mode(WIFI_OFF);
     delay(100);
   }
-  layoutMarkdown(markdown);
-  if (layoutOverflow_ || articleLines_.empty()) {
-    view_ = View::Error;
-  } else {
-    currentPage_ = 0;
-    if (scrapsLoaded_) articleScrapped_ = scrapStore_.findIndex(pendingTopicId_, sourceUrl_) >= 0;
-    view_ = View::Article;
+  currentPage_ = 0;
+  if (source_ == FeedSource::GeekNews && scrapsLoaded_) {
+    articleScrapped_ = scrapStore_.findIndex(pendingTopicId_, sourceUrl_) >= 0;
   }
+  view_ = View::Article;
   requestUpdate();
 }
 
@@ -572,6 +826,16 @@ void GeekNewsActivity::deleteSelectedScrap() {
   } else if (selectedScrap_ >= remaining) {
     selectedScrap_ = remaining - 1;
   }
+}
+
+const char* GeekNewsActivity::sourceName() const {
+  return source_ == FeedSource::HackerNews ? tr(STR_HACKERNEWS) : tr(STR_GEEKNEWS);
+}
+
+void GeekNewsActivity::showArticleQr() {
+  if (sourceUrl_.empty()) return;
+  startActivityForResult(std::make_unique<QrDisplayActivity>(renderer, mappedInput, sourceUrl_),
+                         [](const ActivityResult&) {});
 }
 
 void GeekNewsActivity::retryLoad() {
@@ -770,12 +1034,12 @@ void GeekNewsActivity::appendMarkdownBlock(const std::string& text, const std::s
   appendWrappedSpans(parseInline(text, codeBlock), prefix, indent, quote, spacingAfter);
 }
 
-void GeekNewsActivity::layoutMarkdown(const std::string& markdown) {
+void GeekNewsActivity::layoutMarkdown(const std::string& markdown, const std::string& explicitSourceUrl) {
   articleLines_.clear();
   articleSpans_.clear();
   articleText_.clear();
   pageStarts_.clear();
-  sourceUrl_.clear();
+  sourceUrl_ = explicitSourceUrl;
   layoutOverflow_ = false;
 
   const size_t lineStorageBytes = kMaxLayoutLines * sizeof(RichLine);
@@ -798,7 +1062,7 @@ void GeekNewsActivity::layoutMarkdown(const std::string& markdown) {
   articleText_.reserve(textStorageBytes - 1);
 
   const size_t sourceMarker = markdown.find("- Original source:");
-  if (sourceMarker != std::string::npos) {
+  if (sourceUrl_.empty() && sourceMarker != std::string::npos) {
     const size_t urlStart = markdown.find("](", sourceMarker);
     const size_t urlEnd = urlStart == std::string::npos ? std::string::npos : markdown.find(')', urlStart + 2);
     if (urlStart != std::string::npos && urlEnd != std::string::npos) {
@@ -930,9 +1194,31 @@ void GeekNewsActivity::loop() {
   }
 
   if (view_ == View::LoadingTopics || view_ == View::LoadingArticle) return;
-  if (view_ == View::Error) {
+  if (view_ == View::Sources) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       onGoHome();
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      pendingTopicId_ = 0;
+      topics_.clear();
+      connectWifi();
+      return;
+    }
+    buttonNavigator_.onNextRelease([this] {
+      source_ = source_ == FeedSource::GeekNews ? FeedSource::HackerNews : FeedSource::GeekNews;
+      requestUpdate();
+    });
+    buttonNavigator_.onPreviousRelease([this] {
+      source_ = source_ == FeedSource::GeekNews ? FeedSource::HackerNews : FeedSource::GeekNews;
+      requestUpdate();
+    });
+    return;
+  }
+  if (view_ == View::Error) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      view_ = View::Sources;
+      requestUpdate();
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       retryLoad();
     }
@@ -940,7 +1226,8 @@ void GeekNewsActivity::loop() {
   }
   if (view_ == View::Topics) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      onGoHome();
+      view_ = View::Sources;
+      requestUpdate();
       return;
     }
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && selectedTopic_ < topics_.size()) {
@@ -952,7 +1239,7 @@ void GeekNewsActivity::loop() {
       requestUpdate();
       return;
     }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    if (source_ == FeedSource::GeekNews && mappedInput.wasReleased(MappedInputManager::Button::Left)) {
       openScraps();
       return;
     }
@@ -1049,7 +1336,11 @@ void GeekNewsActivity::loop() {
     view_ = articleBackView_;
     requestUpdate();
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    scrapArticle();
+    if (source_ == FeedSource::GeekNews) {
+      scrapArticle();
+    } else {
+      showArticleQr();
+    }
   } else if (previousPage && currentPage_ > 0) {
     --currentPage_;
     requestUpdate();
@@ -1062,9 +1353,23 @@ void GeekNewsActivity::loop() {
 void GeekNewsActivity::drawStatus(const char* message, const bool retry) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
-                 tr(STR_GEEKNEWS));
+                 sourceName());
   renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, message, true, EpdFontFamily::BOLD);
   const auto labels = mappedInput.mapLabels(tr(STR_HOME), retry ? tr(STR_RETRY) : "", "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
+
+void GeekNewsActivity::drawSources() {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int pageWidth = renderer.getScreenWidth();
+  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentHeight = renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+  const size_t selected = source_ == FeedSource::GeekNews ? 0 : 1;
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_FEEDS));
+  GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, 2, selected,
+               [](const int index) { return std::string(index == 0 ? tr(STR_GEEKNEWS) : tr(STR_HACKERNEWS)); },
+               [](const int) { return std::string(); }, nullptr, nullptr);
+  const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
@@ -1073,11 +1378,13 @@ void GeekNewsActivity::drawTopics() {
   const int pageWidth = renderer.getScreenWidth();
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_GEEKNEWS));
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, sourceName());
   GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, topics_.size(), selectedTopic_,
                [this](const int index) { return topics_[index].title; },
                [this](const int index) { return topics_[index].subtitle; }, nullptr, nullptr);
-  const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_GEEKNEWS_SCRAPS), tr(STR_RETRY));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OPEN),
+                                             source_ == FeedSource::GeekNews ? tr(STR_GEEKNEWS_SCRAPS) : "",
+                                             tr(STR_RETRY));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
@@ -1087,7 +1394,7 @@ void GeekNewsActivity::drawArticle() {
   char pageLabel[24];
   std::snprintf(pageLabel, sizeof(pageLabel), "%zu/%zu", currentPage_ + 1, pageStarts_.size());
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
-                 tr(STR_GEEKNEWS), pageLabel);
+                 sourceName(), pageLabel);
 
   const size_t start = pageStarts_.empty() ? 0 : pageStarts_[currentPage_];
   const size_t end = currentPage_ + 1 < pageStarts_.size() ? pageStarts_[currentPage_ + 1] : articleLines_.size();
@@ -1121,10 +1428,12 @@ void GeekNewsActivity::drawArticle() {
     }
     y += line.height;
   }
-  const char* scrapLabel = scrapStorageError_ ? tr(STR_GEEKNEWS_SCRAP_FAILED)
-                                              : (articleScrapped_ ? tr(STR_GEEKNEWS_SCRAPPED)
-                                                                  : tr(STR_GEEKNEWS_SCRAP));
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), scrapLabel, tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  const char* actionLabel = "QR";
+  if (source_ == FeedSource::GeekNews) {
+    actionLabel = scrapStorageError_ ? tr(STR_GEEKNEWS_SCRAP_FAILED)
+                                     : (articleScrapped_ ? tr(STR_GEEKNEWS_SCRAPPED) : tr(STR_GEEKNEWS_SCRAP));
+  }
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), actionLabel, tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
@@ -1168,10 +1477,13 @@ void GeekNewsActivity::drawDeleteConfirmation() {
 
 void GeekNewsActivity::render(RenderLock&&) {
   renderer.clearScreen();
-  if (view_ == View::LoadingTopics || view_ == View::LoadingArticle) {
+  if (view_ == View::Sources) {
+    drawSources();
+  } else if (view_ == View::LoadingTopics || view_ == View::LoadingArticle) {
     drawStatus(tr(STR_LOADING), false);
   } else if (view_ == View::Error) {
-    drawStatus(tr(STR_GEEKNEWS_LOAD_FAILED), true);
+    drawStatus(source_ == FeedSource::HackerNews ? tr(STR_HACKERNEWS_LOAD_FAILED) : tr(STR_GEEKNEWS_LOAD_FAILED),
+               true);
   } else if (view_ == View::Topics) {
     drawTopics();
   } else if (view_ == View::Scraps) {
