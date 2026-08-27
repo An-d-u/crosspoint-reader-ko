@@ -8,6 +8,8 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
+enum class FeedLoadError : uint8_t { None, Wifi, Dns, Tls, Http, Response, StorageIo, Parse, Memory };
+
 class GeekNewsActivity final : public Activity {
  public:
   explicit GeekNewsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -76,6 +78,7 @@ class GeekNewsActivity final : public Activity {
   bool scrapStoreLoadFailed_ = false;
   bool scrapStorageError_ = false;
   bool articleScrapped_ = false;
+  FeedLoadError lastError_ = FeedLoadError::None;
   int pendingTopicId_ = 0;
   View articleBackView_ = View::Topics;
   std::string articleTitle_;
@@ -110,6 +113,7 @@ class GeekNewsActivity final : public Activity {
   void drawDeleteConfirmation();
   void drawStatus(const char* message, bool retry);
   const char* sourceName() const;
+  const char* loadErrorMessage() const;
 
   static bool receiveFeedChunk(void* context, const uint8_t* data, size_t length);
   static bool parseFeedEntry(const std::string& entry, Topic& topic);

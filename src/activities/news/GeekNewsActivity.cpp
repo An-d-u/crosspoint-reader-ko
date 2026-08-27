@@ -27,18 +27,18 @@ constexpr const char* kHackerNewsHost = "hn.algolia.com";
 constexpr const char* kHackerNewsFeedPath = "/api/v1/search?tags=front_page&hitsPerPage=20";
 constexpr const char* kExtractorHost = "r.jina.ai";
 constexpr const char* kFeedPath = "/rss/news";
-constexpr const char* kTopicPathPrefix = "/topic/";
 constexpr const char* kHackerNewsTempPath = "/.crosspoint/hackernews_front.tmp";
+constexpr const char* kArticleTempPath = "/.crosspoint/feed_article.tmp";
 constexpr size_t kMaxArticleBytes = 48 * 1024;
 constexpr size_t kMaxHackerNewsFeedBytes = 48 * 1024;
 constexpr size_t kMaxArticleLineBytes = 4 * 1024;
-constexpr size_t kInitialArticleReserve = 8 * 1024;
 constexpr size_t kMaxLayoutLines = 512;
 constexpr size_t kMaxLayoutSpans = 1024;
 constexpr size_t kMaxFeedEntryBytes = 16 * 1024;
 constexpr uint32_t kNetworkTimeoutMs = 15000;
 constexpr uint32_t kExtractorTimeoutMs = 30000;
 constexpr uint32_t kWifiConnectTimeoutMs = 15000;
+constexpr uint32_t kNetworkSettleMs = 300;
 constexpr int kNetworkAttempts = 3;
 constexpr int kDnsAttempts = 4;
 constexpr uint32_t kRetryDelayMs = 750;
@@ -53,12 +53,23 @@ bool hasAllocationRoom(const size_t bytes) {
   return freeHeap > bytes + kAllocationSafetyBytes && largestBlock > bytes + 256;
 }
 
+bool hasAddress(const IPAddress& address) {
+  const uint32_t value = static_cast<uint32_t>(address);
+  return value != 0 && value != UINT32_MAX;
+}
+
+bool wifiNetworkReady() {
+  return WiFi.status() == WL_CONNECTED && hasAddress(WiFi.localIP()) && hasAddress(WiFi.gatewayIP()) &&
+         hasAddress(WiFi.dnsIP());
+}
+
 bool waitForWifi() {
-  if (WiFi.status() == WL_CONNECTED && static_cast<uint32_t>(WiFi.localIP()) != 0) {
+  if (wifiNetworkReady()) {
     WiFi.setSleep(false);
     return true;
   }
 
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   const std::string ssid = WIFI_STORE.getLastConnectedSsid();
   const auto* credential = WIFI_STORE.findCredential(ssid);
@@ -72,25 +83,27 @@ bool waitForWifi() {
     WiFi.reconnect();
   }
   const uint32_t startedAt = millis();
-  while ((WiFi.status() != WL_CONNECTED || static_cast<uint32_t>(WiFi.localIP()) == 0) &&
-         millis() - startedAt < kWifiConnectTimeoutMs) {
+  while (!wifiNetworkReady() && millis() - startedAt < kWifiConnectTimeoutMs) {
     delay(100);
   }
-  const bool connected = WiFi.status() == WL_CONNECTED && static_cast<uint32_t>(WiFi.localIP()) != 0;
-  if (connected) WiFi.setSleep(false);
+  const bool connected = wifiNetworkReady();
+  if (connected) {
+    WiFi.setSleep(false);
+    delay(kNetworkSettleMs);
+  }
   return connected;
 }
 
-bool resolveHost(const char* host, IPAddress& address) {
+FeedLoadError resolveHost(const char* host, IPAddress& address) {
   for (int attempt = 0; attempt < kDnsAttempts; ++attempt) {
-    if (!waitForWifi()) return false;
-    if (WiFi.hostByName(host, address) == 1 && static_cast<uint32_t>(address) != 0) return true;
+    if (!waitForWifi()) return FeedLoadError::Wifi;
+    if (WiFi.hostByName(host, address) == 1 && hasAddress(address)) return FeedLoadError::None;
     delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
   }
-  return false;
+  return FeedLoadError::Dns;
 }
 
-bool resolveGeekNewsHost(IPAddress& address) { return resolveHost(kHost, address); }
+FeedLoadError resolveGeekNewsHost(IPAddress& address) { return resolveHost(kHost, address); }
 
 bool readResponseBytes(NetworkClientSecure& client, size_t byteCount, void* context, ResponseWriter writer) {
   uint8_t buffer[512];
@@ -104,17 +117,22 @@ bool readResponseBytes(NetworkClientSecure& client, size_t byteCount, void* cont
   return true;
 }
 
-bool fetchHttps(const char* host, const std::string& path, const char* accept, void* context, ResponseWriter writer,
-                const uint32_t timeoutMs = kNetworkTimeoutMs) {
+FeedLoadError fetchHttps(const char* host, const std::string& path, const char* accept, void* context,
+                         ResponseWriter writer, const uint32_t timeoutMs = kNetworkTimeoutMs) {
   IPAddress address;
-  if (!(std::string_view(host) == kHost ? resolveGeekNewsHost(address) : resolveHost(host, address))) return false;
+  const FeedLoadError resolveError =
+      std::string_view(host) == kHost ? resolveGeekNewsHost(address) : resolveHost(host, address);
+  if (resolveError != FeedLoadError::None) return resolveError;
   NetworkClientSecure client;
   // 공개 읽기 전용 콘텐츠이며, 전체 CA 번들은 ESP32-C3의 DROM 한도를 초과한다.
   client.setInsecure();
   client.setTimeout(timeoutMs);
-  // DNS를 먼저 확인해 연결 직후의 일시적인 이름 해석 실패를 분리하되,
-  // TLS SNI가 유지되도록 실제 연결에는 호스트 이름을 사용한다.
-  if (!client.connect(host, 443, static_cast<int32_t>(timeoutMs))) return false;
+  // DNS를 먼저 확인해 연결 직후의 일시적인 이름 해석 실패를 분리한다.
+  // 미리 확인한 IP로 연결하고 host는 TLS SNI에만 전달해 DNS를 다시 조회하지 않는다.
+  if (!client.connect(address, 443, host, nullptr, nullptr, nullptr)) {
+    client.stop();
+    return FeedLoadError::Tls;
+  }
 
   client.print("GET ");
   client.print(path.c_str());
@@ -126,7 +144,10 @@ bool fetchHttps(const char* host, const std::string& path, const char* accept, v
 
   String line = client.readStringUntil('\n');
   line.trim();
-  if (!line.startsWith("HTTP/1.1 200") && !line.startsWith("HTTP/1.0 200")) return false;
+  if (!line.startsWith("HTTP/1.1 200") && !line.startsWith("HTTP/1.0 200")) {
+    client.stop();
+    return FeedLoadError::Http;
+  }
 
   int64_t contentLength = -1;
   bool chunked = false;
@@ -149,16 +170,36 @@ bool fetchHttps(const char* host, const std::string& path, const char* accept, v
       line.trim();
       const int separator = line.indexOf(';');
       if (separator >= 0) line.remove(separator);
-      const size_t chunkSize = std::strtoul(line.c_str(), nullptr, 16);
-      if (chunkSize == 0) return true;
-      if (!readResponseBytes(client, chunkSize, context, writer)) return false;
+      if (line.isEmpty()) {
+        client.stop();
+        return FeedLoadError::Response;
+      }
+      char* parsedEnd = nullptr;
+      const size_t chunkSize = std::strtoul(line.c_str(), &parsedEnd, 16);
+      if (parsedEnd == line.c_str() || *parsedEnd != '\0') {
+        client.stop();
+        return FeedLoadError::Response;
+      }
+      if (chunkSize == 0) {
+        client.stop();
+        return FeedLoadError::None;
+      }
+      if (!readResponseBytes(client, chunkSize, context, writer)) {
+        client.stop();
+        return FeedLoadError::Response;
+      }
       uint8_t newline[2];
-      if (client.readBytes(newline, sizeof(newline)) != sizeof(newline)) return false;
+      if (client.readBytes(newline, sizeof(newline)) != sizeof(newline)) {
+        client.stop();
+        return FeedLoadError::Response;
+      }
     }
   }
 
   if (contentLength >= 0) {
-    return readResponseBytes(client, static_cast<size_t>(contentLength), context, writer);
+    const bool received = readResponseBytes(client, static_cast<size_t>(contentLength), context, writer);
+    client.stop();
+    return received ? FeedLoadError::None : FeedLoadError::Response;
   }
 
   uint8_t buffer[512];
@@ -166,113 +207,133 @@ bool fetchHttps(const char* host, const std::string& path, const char* accept, v
   while (client.connected() || client.available() > 0) {
     const int available = client.available();
     if (available <= 0) {
-      if (millis() - lastReceivedAt > timeoutMs) return false;
+      if (millis() - lastReceivedAt > timeoutMs) {
+        client.stop();
+        return FeedLoadError::Response;
+      }
       delay(5);
       continue;
     }
     const size_t requested = std::min(static_cast<size_t>(available), sizeof(buffer));
     const int received = client.read(buffer, requested);
     if (received <= 0) continue;
-    if (!writer(context, buffer, static_cast<size_t>(received))) return false;
+    if (!writer(context, buffer, static_cast<size_t>(received))) {
+      client.stop();
+      return FeedLoadError::Response;
+    }
     lastReceivedAt = millis();
   }
-  return true;
+  client.stop();
+  return FeedLoadError::None;
 }
 
-bool fetchGeekNews(const std::string& path, void* context, ResponseWriter writer) {
+FeedLoadError fetchGeekNews(const std::string& path, void* context, ResponseWriter writer) {
   return fetchHttps(kHost, path, "text/markdown, application/atom+xml, text/plain;q=0.9", context, writer);
+}
+
+void prepareNetworkRetry(const FeedLoadError error) {
+  if (error != FeedLoadError::Wifi && error != FeedLoadError::Dns && error != FeedLoadError::Tls) return;
+  WiFi.disconnect(false);
+  delay(100);
+  WiFi.mode(WIFI_STA);
 }
 
 struct FileResponseContext {
   HalFile* file = nullptr;
   size_t received = 0;
   size_t limit = 0;
+  bool tooLarge = false;
+  bool writeFailed = false;
 };
 
 bool receiveFileChunk(void* rawContext, const uint8_t* data, const size_t length) {
   auto& context = *static_cast<FileResponseContext*>(rawContext);
-  if (context.received > context.limit || length > context.limit - context.received) return false;
-  if (context.file->write(data, length) != length) return false;
+  if (context.received > context.limit || length > context.limit - context.received) {
+    context.tooLarge = true;
+    return false;
+  }
+  if (context.file->write(data, length) != length) {
+    context.writeFailed = true;
+    return false;
+  }
   context.received += length;
   return true;
 }
 
-struct BoundedResponseContext {
-  std::string* output = nullptr;
-  size_t limit = 0;
-  bool tooLarge = false;
-};
-
-bool receiveBoundedChunk(void* rawContext, const uint8_t* data, const size_t length) {
-  auto& context = *static_cast<BoundedResponseContext*>(rawContext);
-  if (context.output->size() > context.limit || length > context.limit - context.output->size()) {
-    context.tooLarge = true;
-    return false;
-  }
-  const size_t required = context.output->size() + length;
-  if (required > context.output->capacity()) {
-    const size_t capacity = std::min(context.limit, std::max(required, context.output->capacity() * 2));
-    if (!hasAllocationRoom(capacity + 1)) return false;
-    context.output->reserve(capacity);
-  }
-  context.output->append(reinterpret_cast<const char*>(data), length);
-  return true;
-}
-
-struct ArticleResponseContext {
-  std::string* output;
+struct GeekArticleResponseContext {
+  HalFile* file = nullptr;
   std::string pending;
-  std::string sourceLine;
-  size_t limit;
+  std::string sourceUrl;
+  size_t written = 0;
+  size_t limit = 0;
+  bool markdownStarted = false;
+  bool titleFound = false;
+  bool metadataSkipped = false;
   bool bodyStarted = false;
   bool bodyFinished = false;
   bool tooLarge = false;
+  bool writeFailed = false;
 };
 
-bool appendArticleText(ArticleResponseContext& context, const std::string_view text, const bool newline) {
+bool writeArticleText(GeekArticleResponseContext& context, const std::string_view text, const bool newline) {
   const size_t appendSize = text.size() + (newline ? 1 : 0);
-  if (context.output->size() > context.limit || appendSize > context.limit - context.output->size()) {
+  if (context.written > context.limit || appendSize > context.limit - context.written) {
     context.tooLarge = true;
     return false;
   }
-  const size_t required = context.output->size() + appendSize;
-  if (required > context.output->capacity()) {
-    const size_t capacity = std::min(context.limit, std::max(required, context.output->capacity() * 2));
-    if (!hasAllocationRoom(capacity + 1)) {
-      context.tooLarge = true;
-      return false;
-    }
-    context.output->reserve(capacity);
+  if ((!text.empty() && context.file->write(text.data(), text.size()) != text.size()) ||
+      (newline && context.file->write(static_cast<uint8_t>('\n')) != 1)) {
+    context.writeFailed = true;
+    return false;
   }
-  context.output->append(text.data(), text.size());
-  if (newline) context.output->push_back('\n');
+  context.written += appendSize;
   return true;
 }
 
-bool processArticleLine(ArticleResponseContext& context, std::string_view line, const bool newline) {
+bool processGeekArticleLine(GeekArticleResponseContext& context, std::string_view line, const bool newline) {
   if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
 
-  if (!context.bodyStarted) {
-    if (line.rfind("- Original source:", 0) == 0) {
-      context.sourceLine.assign(line.data(), line.size());
-    }
-    if (line == "## Topic Body") {
-      if (!context.sourceLine.empty() && !appendArticleText(context, context.sourceLine, true)) return false;
-      if (!appendArticleText(context, line, true)) return false;
-      context.bodyStarted = true;
+  if (!context.markdownStarted) {
+    context.markdownStarted = line == "Markdown Content:";
+    return true;
+  }
+
+  if (!context.titleFound) {
+    if (line.rfind("# ", 0) != 0) return true;
+    context.titleFound = true;
+    const size_t urlStart = line.find("](");
+    const size_t urlEnd = urlStart == std::string_view::npos ? std::string_view::npos : line.find(')', urlStart + 2);
+    if (urlStart != std::string_view::npos && urlEnd != std::string_view::npos) {
+      context.sourceUrl.assign(line.substr(urlStart + 2, urlEnd - urlStart - 2));
     }
     return true;
   }
 
-  if (line == "## Comments") {
+  if (!context.bodyStarted) {
+    if (line.empty()) return true;
+    if (!context.metadataSkipped) {
+      context.metadataSkipped = true;
+      if (line.find(" by [") != std::string_view::npos && line.find("favorite") != std::string_view::npos) {
+        return true;
+      }
+    }
+    if (!context.sourceUrl.empty()) {
+      const std::string sourceLine = "- Original source: [source](" + context.sourceUrl + ")";
+      if (!writeArticleText(context, sourceLine, true)) return false;
+    }
+    if (!writeArticleText(context, "## Topic Body", true)) return false;
+    context.bodyStarted = true;
+  }
+
+  if (line == "## 댓글과 토론" || line.rfind("## 함께 보면 좋은 글", 0) == 0) {
     context.bodyFinished = true;
     return true;
   }
-  return appendArticleText(context, line, newline);
+  return writeArticleText(context, line, newline);
 }
 
-bool receiveArticleChunk(void* rawContext, const uint8_t* data, const size_t length) {
-  auto& context = *static_cast<ArticleResponseContext*>(rawContext);
+bool receiveGeekArticleChunk(void* rawContext, const uint8_t* data, const size_t length) {
+  auto& context = *static_cast<GeekArticleResponseContext*>(rawContext);
   if (context.bodyFinished) return true;
 
   const size_t pendingRequired = context.pending.size() + length;
@@ -289,7 +350,7 @@ bool receiveArticleChunk(void* rawContext, const uint8_t* data, const size_t len
   while (cursor < context.pending.size()) {
     const size_t end = context.pending.find('\n', cursor);
     if (end == std::string::npos) break;
-    if (!processArticleLine(context, std::string_view(context.pending).substr(cursor, end - cursor), true)) {
+    if (!processGeekArticleLine(context, std::string_view(context.pending).substr(cursor, end - cursor), true)) {
       return false;
     }
     cursor = end + 1;
@@ -308,19 +369,82 @@ bool receiveArticleChunk(void* rawContext, const uint8_t* data, const size_t len
   return true;
 }
 
-bool fetchGeekNewsArticle(const std::string& path, std::string& output) {
-  if (!hasAllocationRoom(kInitialArticleReserve + 1)) return false;
-  output.reserve(kInitialArticleReserve);
-  for (int attempt = 0; attempt < kNetworkAttempts; ++attempt) {
+bool readArticleFile(std::string& output, FeedLoadError& error) {
+  HalFile input = Storage.open(kArticleTempPath, O_RDONLY);
+  if (!input) {
+    error = FeedLoadError::StorageIo;
+    return false;
+  }
+  const size_t length = input.size();
+  if (length == 0 || length > kMaxArticleBytes) {
+    input.close();
+    error = length > kMaxArticleBytes ? FeedLoadError::Memory : FeedLoadError::Response;
+    return false;
+  }
+  if (!hasAllocationRoom(length + 1)) {
+    input.close();
+    error = FeedLoadError::Memory;
+    return false;
+  }
+  output.resize(length);
+  size_t received = 0;
+  while (received < length) {
+    const int count = input.read(output.data() + received, length - received);
+    if (count <= 0) break;
+    received += static_cast<size_t>(count);
+  }
+  const bool closed = input.close();
+  if (received != length || !closed) {
     output.clear();
-    ArticleResponseContext context{&output, {}, {}, kMaxArticleBytes};
-    context.pending.reserve(1024);
-    const bool fetched = fetchGeekNews(path, &context, receiveArticleChunk);
-    if (fetched && !context.bodyFinished && !context.pending.empty()) {
-      processArticleLine(context, context.pending, false);
+    error = FeedLoadError::StorageIo;
+    return false;
+  }
+  error = FeedLoadError::None;
+  return true;
+}
+
+bool fetchGeekNewsArticle(const int topicId, std::string& output, FeedLoadError& error) {
+  error = FeedLoadError::None;
+  Storage.mkdir("/.crosspoint");
+  for (int attempt = 0; attempt < kNetworkAttempts; ++attempt) {
+    Storage.remove(kArticleTempPath);
+    output.clear();
+    HalFile file = Storage.open(kArticleTempPath, O_WRITE | O_CREAT | O_TRUNC);
+    if (!file) {
+      error = FeedLoadError::StorageIo;
+      break;
     }
-    if (fetched && context.bodyStarted && !output.empty()) return true;
-    if (context.tooLarge) break;
+    GeekArticleResponseContext context;
+    context.file = &file;
+    context.limit = kMaxArticleBytes;
+    context.pending.reserve(1024);
+    const std::string path = "/https://news.hada.io/topic?id=" + std::to_string(topicId);
+    const FeedLoadError fetchError =
+        fetchHttps(kExtractorHost, path, "text/markdown, text/plain;q=0.9", &context, receiveGeekArticleChunk,
+                   kExtractorTimeoutMs);
+    bool finalLineProcessed = true;
+    if (fetchError == FeedLoadError::None && !context.bodyFinished && !context.pending.empty()) {
+      finalLineProcessed = processGeekArticleLine(context, context.pending, false);
+    }
+    file.flush();
+    const bool closed = file.close();
+    const bool responseReady =
+        fetchError == FeedLoadError::None && finalLineProcessed && closed && context.bodyStarted && context.written > 0;
+    if (responseReady) {
+      if (readArticleFile(output, error)) {
+        Storage.remove(kArticleTempPath);
+        return true;
+      }
+    } else {
+      error = context.tooLarge
+                  ? FeedLoadError::Memory
+                  : (context.writeFailed || !closed
+                         ? FeedLoadError::StorageIo
+                         : (fetchError == FeedLoadError::None ? FeedLoadError::Parse : fetchError));
+    }
+    Storage.remove(kArticleTempPath);
+    if (responseReady || context.tooLarge || context.writeFailed) break;
+    prepareNetworkRetry(error);
     if (attempt + 1 < kNetworkAttempts) delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
   }
   output.clear();
@@ -401,7 +525,7 @@ void GeekNewsActivity::onExit() {
 }
 
 void GeekNewsActivity::connectWifi() {
-  if (WiFi.status() == WL_CONNECTED && static_cast<uint32_t>(WiFi.localIP()) != 0) {
+  if (wifiNetworkReady()) {
     WiFi.setSleep(false);
     view_ = View::LoadingTopics;
     loadPending_ = true;
@@ -595,13 +719,17 @@ void GeekNewsActivity::loadTopics() {
 
 void GeekNewsActivity::loadGeekNewsTopics() {
   bool loaded = false;
+  lastError_ = FeedLoadError::None;
   for (int attempt = 0; attempt < kNetworkAttempts; ++attempt) {
     topics_.clear();
     FeedStreamContext context;
     context.pending.reserve(2048);
     context.topics = &topics_;
-    loaded = fetchGeekNews(kFeedPath, &context, receiveFeedChunk) && !topics_.empty();
+    const FeedLoadError fetchError = fetchGeekNews(kFeedPath, &context, receiveFeedChunk);
+    loaded = fetchError == FeedLoadError::None && !topics_.empty();
     if (loaded) break;
+    lastError_ = fetchError == FeedLoadError::None ? FeedLoadError::Parse : fetchError;
+    prepareNetworkRetry(lastError_);
     if (attempt + 1 < kNetworkAttempts) delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
   }
   if (!loaded) {
@@ -610,6 +738,7 @@ void GeekNewsActivity::loadGeekNewsTopics() {
     requestUpdate();
     return;
   }
+  lastError_ = FeedLoadError::None;
   selectedTopic_ = 0;
   view_ = View::Topics;
   requestUpdate();
@@ -617,25 +746,34 @@ void GeekNewsActivity::loadGeekNewsTopics() {
 
 void GeekNewsActivity::loadHackerNewsTopics() {
   bool loaded = false;
+  lastError_ = FeedLoadError::None;
   Storage.mkdir("/.crosspoint");
   for (int attempt = 0; attempt < kNetworkAttempts && !loaded; ++attempt) {
     topics_.clear();
     Storage.remove(kHackerNewsTempPath);
     HalFile output = Storage.open(kHackerNewsTempPath, O_WRITE | O_CREAT | O_TRUNC);
-    if (!output) break;
+    if (!output) {
+      lastError_ = FeedLoadError::StorageIo;
+      break;
+    }
     FileResponseContext context{&output, 0, kMaxHackerNewsFeedBytes};
-    const bool fetched = fetchHttps(kHackerNewsHost, kHackerNewsFeedPath, "application/json", &context,
-                                    receiveFileChunk);
+    const FeedLoadError fetchError = fetchHttps(kHackerNewsHost, kHackerNewsFeedPath, "application/json", &context,
+                                                receiveFileChunk);
     output.flush();
     const bool closed = output.close();
-    if (!fetched || !closed || context.received == 0) {
+    if (fetchError != FeedLoadError::None || !closed || context.received == 0) {
+      lastError_ = fetchError != FeedLoadError::None
+                       ? fetchError
+                       : (closed ? FeedLoadError::Response : FeedLoadError::StorageIo);
       Storage.remove(kHackerNewsTempPath);
+      prepareNetworkRetry(lastError_);
       if (attempt + 1 < kNetworkAttempts) delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
       continue;
     }
 
     HalFile input = Storage.open(kHackerNewsTempPath, O_RDONLY);
     if (!input) {
+      lastError_ = FeedLoadError::StorageIo;
       Storage.remove(kHackerNewsTempPath);
       break;
     }
@@ -653,6 +791,7 @@ void GeekNewsActivity::loadHackerNewsTopics() {
     input.close();
     Storage.remove(kHackerNewsTempPath);
     if (error) {
+      lastError_ = error == DeserializationError::NoMemory ? FeedLoadError::Memory : FeedLoadError::Parse;
       if (attempt + 1 < kNetworkAttempts) delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
       continue;
     }
@@ -677,6 +816,7 @@ void GeekNewsActivity::loadHackerNewsTopics() {
       topics_.push_back(std::move(topic));
     }
     loaded = !topics_.empty();
+    if (!loaded) lastError_ = FeedLoadError::Parse;
   }
 
   if (!loaded) {
@@ -685,6 +825,7 @@ void GeekNewsActivity::loadHackerNewsTopics() {
     requestUpdate();
     return;
   }
+  lastError_ = FeedLoadError::None;
   selectedTopic_ = 0;
   view_ = View::Topics;
   requestUpdate();
@@ -692,17 +833,22 @@ void GeekNewsActivity::loadHackerNewsTopics() {
 
 bool GeekNewsActivity::loadGeekNewsArticle(const int topicId) {
   std::string markdown;
-  const std::string path = std::string(kTopicPathPrefix) + std::to_string(topicId) + ".md";
-  if (!fetchGeekNewsArticle(path, markdown)) return false;
+  if (!fetchGeekNewsArticle(topicId, markdown, lastError_)) return false;
   layoutMarkdown(markdown);
-  return !layoutOverflow_ && !articleLines_.empty();
+  if (layoutOverflow_) lastError_ = FeedLoadError::Memory;
+  if (!layoutOverflow_ && articleLines_.empty()) lastError_ = FeedLoadError::Parse;
+  return lastError_ == FeedLoadError::None;
 }
 
 bool GeekNewsActivity::loadHackerNewsArticle(const int topicId) {
+  lastError_ = FeedLoadError::None;
   const auto found = std::find_if(topics_.begin(), topics_.end(), [topicId](const Topic& topic) {
     return topic.id == topicId;
   });
-  if (found == topics_.end()) return false;
+  if (found == topics_.end()) {
+    lastError_ = FeedLoadError::Parse;
+    return false;
+  }
 
   const std::string discussionUrl =
       std::string("https://news.ycombinator.com/item?id=") + std::to_string(topicId);
@@ -710,36 +856,64 @@ bool GeekNewsActivity::loadHackerNewsArticle(const int topicId) {
     std::string markdown = hackerNewsHtmlToMarkdown(found->text);
     if (trim(markdown).empty()) markdown = tr(STR_HACKERNEWS_ARTICLE_UNAVAILABLE);
     layoutMarkdown(markdown, discussionUrl);
-    return !layoutOverflow_ && !articleLines_.empty();
+    if (layoutOverflow_) lastError_ = FeedLoadError::Memory;
+    if (!layoutOverflow_ && articleLines_.empty()) lastError_ = FeedLoadError::Parse;
+    return lastError_ == FeedLoadError::None;
   }
 
   if (!hackerNewsUrlCanBeArticle(found->url)) {
     layoutMarkdown(tr(STR_HACKERNEWS_ARTICLE_UNAVAILABLE), found->url);
-    return !layoutOverflow_ && !articleLines_.empty();
+    if (layoutOverflow_) lastError_ = FeedLoadError::Memory;
+    if (!layoutOverflow_ && articleLines_.empty()) lastError_ = FeedLoadError::Parse;
+    return lastError_ == FeedLoadError::None;
   }
 
+  Storage.mkdir("/.crosspoint");
   std::string markdown;
-  if (!hasAllocationRoom(kInitialArticleReserve + 1)) return false;
-  markdown.reserve(kInitialArticleReserve);
   bool fetched = false;
-  bool tooLarge = false;
   for (int attempt = 0; attempt < kNetworkAttempts; ++attempt) {
+    Storage.remove(kArticleTempPath);
     markdown.clear();
-    BoundedResponseContext context{&markdown, kMaxArticleBytes, false};
+    HalFile output = Storage.open(kArticleTempPath, O_WRITE | O_CREAT | O_TRUNC);
+    if (!output) {
+      lastError_ = FeedLoadError::StorageIo;
+      break;
+    }
+    FileResponseContext context{&output, 0, kMaxArticleBytes};
     const std::string path = "/" + found->url;
-    fetched = fetchHttps(kExtractorHost, path, "text/markdown, text/plain;q=0.9", &context, receiveBoundedChunk,
-                         kExtractorTimeoutMs);
-    if (fetched && !markdown.empty()) break;
-    tooLarge = context.tooLarge;
-    if (tooLarge) break;
+    const FeedLoadError fetchError =
+        fetchHttps(kExtractorHost, path, "text/markdown, text/plain;q=0.9", &context, receiveFileChunk,
+                   kExtractorTimeoutMs);
+    output.flush();
+    const bool closed = output.close();
+    const bool responseReady = fetchError == FeedLoadError::None && closed && context.received > 0;
+    if (responseReady) {
+      if (readArticleFile(markdown, lastError_)) {
+        fetched = true;
+        Storage.remove(kArticleTempPath);
+        break;
+      }
+    } else {
+      lastError_ = context.tooLarge
+                       ? FeedLoadError::Memory
+                       : (context.writeFailed || !closed
+                              ? FeedLoadError::StorageIo
+                              : (fetchError == FeedLoadError::None ? FeedLoadError::Response : fetchError));
+    }
+    Storage.remove(kArticleTempPath);
+    if (responseReady || context.tooLarge || context.writeFailed) break;
+    prepareNetworkRetry(lastError_);
     if (attempt + 1 < kNetworkAttempts) delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
   }
-  if (!fetched && !tooLarge) return false;
+  if (!fetched) return false;
+  lastError_ = FeedLoadError::None;
 
   splitExtractorResponse(markdown);
-  if (tooLarge || trim(markdown).empty()) markdown = tr(STR_HACKERNEWS_ARTICLE_UNAVAILABLE);
+  if (trim(markdown).empty()) markdown = tr(STR_HACKERNEWS_ARTICLE_UNAVAILABLE);
   layoutMarkdown(markdown, found->url);
-  return !layoutOverflow_ && !articleLines_.empty();
+  if (layoutOverflow_) lastError_ = FeedLoadError::Memory;
+  if (!layoutOverflow_ && articleLines_.empty()) lastError_ = FeedLoadError::Parse;
+  return lastError_ == FeedLoadError::None;
 }
 
 void GeekNewsActivity::loadArticle(const int topicId) {
@@ -830,6 +1004,30 @@ void GeekNewsActivity::deleteSelectedScrap() {
 
 const char* GeekNewsActivity::sourceName() const {
   return source_ == FeedSource::HackerNews ? tr(STR_HACKERNEWS) : tr(STR_GEEKNEWS);
+}
+
+const char* GeekNewsActivity::loadErrorMessage() const {
+  switch (lastError_) {
+    case FeedLoadError::Wifi:
+      return tr(STR_FEED_ERROR_WIFI);
+    case FeedLoadError::Dns:
+      return tr(STR_FEED_ERROR_DNS);
+    case FeedLoadError::Tls:
+      return tr(STR_FEED_ERROR_TLS);
+    case FeedLoadError::Http:
+      return tr(STR_FEED_ERROR_HTTP);
+    case FeedLoadError::Response:
+      return tr(STR_FEED_ERROR_RESPONSE);
+    case FeedLoadError::StorageIo:
+      return tr(STR_FEED_ERROR_STORAGE);
+    case FeedLoadError::Parse:
+      return tr(STR_FEED_ERROR_PARSE);
+    case FeedLoadError::Memory:
+      return tr(STR_FEED_ERROR_MEMORY);
+    case FeedLoadError::None:
+    default:
+      return "";
+  }
 }
 
 void GeekNewsActivity::showArticleQr() {
@@ -1354,8 +1552,12 @@ void GeekNewsActivity::drawStatus(const char* message, const bool retry) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
                  sourceName());
-  renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, message, true, EpdFontFamily::BOLD);
-  const auto labels = mappedInput.mapLabels(tr(STR_HOME), retry ? tr(STR_RETRY) : "", "", "");
+  const int centerY = renderer.getScreenHeight() / 2;
+  renderer.drawCenteredText(UI_12_FONT_ID, centerY - (retry ? 14 : 0), message, true, EpdFontFamily::BOLD);
+  if (retry && lastError_ != FeedLoadError::None) {
+    renderer.drawCenteredText(UI_10_FONT_ID, centerY + 20, loadErrorMessage());
+  }
+  const auto labels = mappedInput.mapLabels(retry ? tr(STR_BACK) : "", retry ? tr(STR_RETRY) : "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
