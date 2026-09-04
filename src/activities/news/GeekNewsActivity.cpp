@@ -1,9 +1,9 @@
 #include "GeekNewsActivity.h"
 
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
 #include <HalStorage.h>
 #include <I18n.h>
-#include <NetworkClientSecure.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 
@@ -20,6 +20,7 @@
 #include "activities/reader/QrDisplayActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/FeedSecureClient.h"
 
 namespace {
 constexpr const char* kHost = "news.hada.io";
@@ -35,12 +36,12 @@ constexpr size_t kMaxArticleLineBytes = 4 * 1024;
 constexpr size_t kMaxLayoutLines = 512;
 constexpr size_t kMaxLayoutSpans = 1024;
 constexpr size_t kMaxFeedEntryBytes = 16 * 1024;
-constexpr uint32_t kNetworkTimeoutMs = 15000;
-constexpr uint32_t kExtractorTimeoutMs = 30000;
+constexpr uint32_t kNetworkTimeoutMs = 30000;
+constexpr uint32_t kExtractorTimeoutMs = 60000;
 constexpr uint32_t kWifiConnectTimeoutMs = 15000;
 constexpr uint32_t kNetworkSettleMs = 300;
 constexpr int kNetworkAttempts = 3;
-constexpr int kDnsAttempts = 4;
+constexpr int kMaxRedirects = 5;
 constexpr uint32_t kRetryDelayMs = 750;
 constexpr int kTextRightSafetyPx = 2;
 constexpr size_t kAllocationSafetyBytes = 8 * 1024;
@@ -94,141 +95,101 @@ bool waitForWifi() {
   return connected;
 }
 
-FeedLoadError resolveHost(const char* host, IPAddress& address) {
-  for (int attempt = 0; attempt < kDnsAttempts; ++attempt) {
-    if (!waitForWifi()) return FeedLoadError::Wifi;
-    if (WiFi.hostByName(host, address) == 1 && hasAddress(address)) return FeedLoadError::None;
-    delay(kRetryDelayMs * static_cast<uint32_t>(attempt + 1));
-  }
-  return FeedLoadError::Dns;
-}
+class ResponseWriterStream final : public Stream {
+ public:
+  ResponseWriterStream(void* context, const ResponseWriter writer) : context_(context), writer_(writer) {}
 
-FeedLoadError resolveGeekNewsHost(IPAddress& address) { return resolveHost(kHost, address); }
+  size_t write(const uint8_t byte) override { return write(&byte, 1); }
 
-bool readResponseBytes(NetworkClientSecure& client, size_t byteCount, void* context, ResponseWriter writer) {
-  uint8_t buffer[512];
-  while (byteCount > 0) {
-    const size_t requested = std::min(byteCount, sizeof(buffer));
-    const size_t received = client.readBytes(buffer, requested);
-    if (received == 0) return false;
-    if (!writer(context, buffer, received)) return false;
-    byteCount -= received;
+  size_t write(const uint8_t* buffer, const size_t size) override {
+    if (failed_ || !writer_(context_, buffer, size)) {
+      failed_ = true;
+      return 0;
+    }
+    received_ += size;
+    return size;
   }
-  return true;
+
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  void flush() override {}
+
+  bool failed() const { return failed_; }
+  size_t received() const { return received_; }
+
+ private:
+  void* context_ = nullptr;
+  ResponseWriter writer_ = nullptr;
+  size_t received_ = 0;
+  bool failed_ = false;
+};
+
+FeedLoadError classifyConnectionFailure(const char* host, const int httpError) {
+  if (httpError == HTTPC_ERROR_TOO_LESS_RAM) return FeedLoadError::Memory;
+  if (!wifiNetworkReady()) return FeedLoadError::Wifi;
+  if (httpError == HTTPC_ERROR_READ_TIMEOUT || httpError == HTTPC_ERROR_CONNECTION_LOST) {
+    return FeedLoadError::Response;
+  }
+  IPAddress address;
+  if (WiFi.hostByName(host, address) != 1 || !hasAddress(address)) return FeedLoadError::Dns;
+  return FeedLoadError::Tls;
 }
 
 FeedLoadError fetchHttps(const char* host, const std::string& path, const char* accept, void* context,
-                         ResponseWriter writer, const uint32_t timeoutMs = kNetworkTimeoutMs) {
-  IPAddress address;
-  const FeedLoadError resolveError =
-      std::string_view(host) == kHost ? resolveGeekNewsHost(address) : resolveHost(host, address);
-  if (resolveError != FeedLoadError::None) return resolveError;
-  NetworkClientSecure client;
-  // 공개 읽기 전용 콘텐츠이며, 전체 CA 번들은 ESP32-C3의 DROM 한도를 초과한다.
+                         ResponseWriter writer, FeedLoadDiagnostics& diagnostics,
+                         const uint32_t timeoutMs = kNetworkTimeoutMs) {
+  diagnostics = {};
+  if (!waitForWifi()) return FeedLoadError::Wifi;
+
+  const std::string url = std::string("https://") + host + path;
+  FeedSecureClient client;
+  // 기존 동작 유지: 부팅 직후 공개 읽기 요청에서도 인증서 검증 전체를 생략한다(서버 신원은 검증되지 않음).
   client.setInsecure();
-  client.setTimeout(timeoutMs);
-  // DNS를 먼저 확인해 연결 직후의 일시적인 이름 해석 실패를 분리한다.
-  // 미리 확인한 IP로 연결하고 host는 TLS SNI에만 전달해 DNS를 다시 조회하지 않는다.
-  if (!client.connect(address, 443, host, nullptr, nullptr, nullptr)) {
-    client.stop();
-    return FeedLoadError::Tls;
+  HTTPClient http;
+  if (!http.begin(client, url.c_str())) return FeedLoadError::Http;
+  http.setConnectTimeout(static_cast<int32_t>(timeoutMs));
+  http.setTimeout(static_cast<uint16_t>(timeoutMs));
+  http.setReuse(false);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setRedirectLimit(kMaxRedirects);
+  http.setUserAgent("CrossPoint/1.0 (+https://github.com/An-d-u/crosspoint-reader-ko)");
+  http.setAcceptEncoding("identity");
+  http.addHeader("Accept", accept);
+
+  const uint32_t startedAt = millis();
+  diagnostics.stage = FeedLoadDiagnostics::Stage::Headers;
+  const int status = http.GET();
+  diagnostics.code = status;
+  diagnostics.elapsedMs = millis() - startedAt;
+  if (status != HTTP_CODE_OK) {
+    const FeedLoadError error =
+        status < 0 ? classifyConnectionFailure(host, status) : FeedLoadError::Http;
+    http.end();
+    return error;
   }
 
-  client.print("GET ");
-  client.print(path.c_str());
-  client.print(" HTTP/1.1\r\nHost: ");
-  client.print(host);
-  client.print("\r\nUser-Agent: CrossPoint/1.0 (+https://github.com/An-d-u/crosspoint-reader-ko)\r\nAccept: ");
-  client.print(accept);
-  client.print("\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n");
-
-  String line = client.readStringUntil('\n');
-  line.trim();
-  if (!line.startsWith("HTTP/1.1 200") && !line.startsWith("HTTP/1.0 200")) {
-    client.stop();
-    return FeedLoadError::Http;
-  }
-
-  int64_t contentLength = -1;
-  bool chunked = false;
-  while (true) {
-    line = client.readStringUntil('\n');
-    line.trim();
-    if (line.isEmpty()) break;
-    String lowered = line;
-    lowered.toLowerCase();
-    if (lowered.startsWith("content-length:")) {
-      contentLength = lowered.substring(15).toInt();
-    } else if (lowered.startsWith("transfer-encoding:") && lowered.indexOf("chunked") >= 0) {
-      chunked = true;
-    }
-  }
-
-  if (chunked) {
-    while (true) {
-      line = client.readStringUntil('\n');
-      line.trim();
-      const int separator = line.indexOf(';');
-      if (separator >= 0) line.remove(separator);
-      if (line.isEmpty()) {
-        client.stop();
-        return FeedLoadError::Response;
-      }
-      char* parsedEnd = nullptr;
-      const size_t chunkSize = std::strtoul(line.c_str(), &parsedEnd, 16);
-      if (parsedEnd == line.c_str() || *parsedEnd != '\0') {
-        client.stop();
-        return FeedLoadError::Response;
-      }
-      if (chunkSize == 0) {
-        client.stop();
-        return FeedLoadError::None;
-      }
-      if (!readResponseBytes(client, chunkSize, context, writer)) {
-        client.stop();
-        return FeedLoadError::Response;
-      }
-      uint8_t newline[2];
-      if (client.readBytes(newline, sizeof(newline)) != sizeof(newline)) {
-        client.stop();
-        return FeedLoadError::Response;
-      }
-    }
-  }
-
-  if (contentLength >= 0) {
-    const bool received = readResponseBytes(client, static_cast<size_t>(contentLength), context, writer);
-    client.stop();
-    return received ? FeedLoadError::None : FeedLoadError::Response;
-  }
-
-  uint8_t buffer[512];
-  uint32_t lastReceivedAt = millis();
-  while (client.connected() || client.available() > 0) {
-    const int available = client.available();
-    if (available <= 0) {
-      if (millis() - lastReceivedAt > timeoutMs) {
-        client.stop();
-        return FeedLoadError::Response;
-      }
-      delay(5);
-      continue;
-    }
-    const size_t requested = std::min(static_cast<size_t>(available), sizeof(buffer));
-    const int received = client.read(buffer, requested);
-    if (received <= 0) continue;
-    if (!writer(context, buffer, static_cast<size_t>(received))) {
-      client.stop();
-      return FeedLoadError::Response;
-    }
-    lastReceivedAt = millis();
-  }
-  client.stop();
-  return FeedLoadError::None;
+  const int expected = http.getSize();
+  diagnostics.stage = FeedLoadDiagnostics::Stage::Body;
+  diagnostics.expected = expected;
+  ResponseWriterStream output(context, writer);
+  const int received = http.writeToStream(&output);
+  diagnostics.code = received < 0 ? received : status;
+  diagnostics.received = output.received();
+  diagnostics.sinkFailed = output.failed();
+  diagnostics.timedOut = client.readTimedOut();
+  diagnostics.elapsedMs = millis() - startedAt;
+  const bool complete = received >= 0 && static_cast<size_t>(received) == output.received() && !output.failed() &&
+                        !diagnostics.timedOut &&
+                        (expected < 0 || output.received() == static_cast<size_t>(expected));
+  http.end();
+  if (received == HTTPC_ERROR_TOO_LESS_RAM) return FeedLoadError::Memory;
+  return complete ? FeedLoadError::None : FeedLoadError::Response;
 }
 
-FeedLoadError fetchGeekNews(const std::string& path, void* context, ResponseWriter writer) {
-  return fetchHttps(kHost, path, "text/markdown, application/atom+xml, text/plain;q=0.9", context, writer);
+FeedLoadError fetchGeekNews(const std::string& path, void* context, ResponseWriter writer,
+                           FeedLoadDiagnostics& diagnostics) {
+  return fetchHttps(kHost, path, "text/markdown, application/atom+xml, text/plain;q=0.9", context, writer, diagnostics);
 }
 
 void prepareNetworkRetry(const FeedLoadError error) {
@@ -336,35 +297,32 @@ bool receiveGeekArticleChunk(void* rawContext, const uint8_t* data, const size_t
   auto& context = *static_cast<GeekArticleResponseContext*>(rawContext);
   if (context.bodyFinished) return true;
 
-  const size_t pendingRequired = context.pending.size() + length;
-  if (pendingRequired > context.pending.capacity()) {
-    const size_t capacity = std::max(pendingRequired, context.pending.capacity() * 2);
-    if (capacity > kMaxArticleLineBytes || !hasAllocationRoom(capacity + 1)) {
+  // HTTP 수신 블록 전체가 아니라 실제 한 줄에만 길이 제한을 적용한다.
+  const std::string_view incoming(reinterpret_cast<const char*>(data), length);
+  size_t cursor = 0;
+  while (cursor < incoming.size()) {
+    const size_t end = incoming.find('\n', cursor);
+    const bool newline = end != std::string_view::npos;
+    const size_t count = (newline ? end : incoming.size()) - cursor;
+    const size_t required = context.pending.size() + count;
+    if (required > kMaxArticleLineBytes) {
       context.tooLarge = true;
       return false;
     }
-    context.pending.reserve(capacity);
-  }
-  context.pending.append(reinterpret_cast<const char*>(data), length);
-  size_t cursor = 0;
-  while (cursor < context.pending.size()) {
-    const size_t end = context.pending.find('\n', cursor);
-    if (end == std::string::npos) break;
-    if (!processGeekArticleLine(context, std::string_view(context.pending).substr(cursor, end - cursor), true)) {
-      return false;
+    if (required > context.pending.capacity()) {
+      const size_t capacity = std::min(kMaxArticleLineBytes, std::max(required, context.pending.capacity() * 2));
+      if (!hasAllocationRoom(capacity + 1)) {
+        context.tooLarge = true;
+        return false;
+      }
+      context.pending.reserve(capacity);
     }
-    cursor = end + 1;
-    if (context.bodyFinished) break;
-  }
-
-  if (context.bodyFinished) {
+    context.pending.append(incoming.data() + cursor, count);
+    if (!newline) break;
+    if (!processGeekArticleLine(context, context.pending, true)) return false;
     context.pending.clear();
-    return true;
-  }
-  if (cursor > 0) context.pending.erase(0, cursor);
-  if (context.pending.size() > kMaxArticleLineBytes) {
-    context.tooLarge = true;
-    return false;
+    if (context.bodyFinished) return true;
+    cursor = end + 1;
   }
   return true;
 }
@@ -403,7 +361,8 @@ bool readArticleFile(std::string& output, FeedLoadError& error) {
   return true;
 }
 
-bool fetchGeekNewsArticle(const int topicId, std::string& output, FeedLoadError& error) {
+bool fetchGeekNewsArticle(const int topicId, std::string& output, FeedLoadError& error,
+                          FeedLoadDiagnostics& diagnostics) {
   error = FeedLoadError::None;
   Storage.mkdir("/.crosspoint");
   for (int attempt = 0; attempt < kNetworkAttempts; ++attempt) {
@@ -421,7 +380,7 @@ bool fetchGeekNewsArticle(const int topicId, std::string& output, FeedLoadError&
     const std::string path = "/https://news.hada.io/topic?id=" + std::to_string(topicId);
     const FeedLoadError fetchError =
         fetchHttps(kExtractorHost, path, "text/markdown, text/plain;q=0.9", &context, receiveGeekArticleChunk,
-                   kExtractorTimeoutMs);
+                   diagnostics, kExtractorTimeoutMs);
     bool finalLineProcessed = true;
     if (fetchError == FeedLoadError::None && !context.bodyFinished && !context.pending.empty()) {
       finalLineProcessed = processGeekArticleLine(context, context.pending, false);
@@ -710,6 +669,7 @@ bool GeekNewsActivity::receiveFeedChunk(void* rawContext, const uint8_t* data, c
 }
 
 void GeekNewsActivity::loadTopics() {
+  lastDiagnostics_ = {};
   if (source_ == FeedSource::HackerNews) {
     loadHackerNewsTopics();
   } else {
@@ -725,7 +685,7 @@ void GeekNewsActivity::loadGeekNewsTopics() {
     FeedStreamContext context;
     context.pending.reserve(2048);
     context.topics = &topics_;
-    const FeedLoadError fetchError = fetchGeekNews(kFeedPath, &context, receiveFeedChunk);
+    const FeedLoadError fetchError = fetchGeekNews(kFeedPath, &context, receiveFeedChunk, lastDiagnostics_);
     loaded = fetchError == FeedLoadError::None && !topics_.empty();
     if (loaded) break;
     lastError_ = fetchError == FeedLoadError::None ? FeedLoadError::Parse : fetchError;
@@ -758,7 +718,7 @@ void GeekNewsActivity::loadHackerNewsTopics() {
     }
     FileResponseContext context{&output, 0, kMaxHackerNewsFeedBytes};
     const FeedLoadError fetchError = fetchHttps(kHackerNewsHost, kHackerNewsFeedPath, "application/json", &context,
-                                                receiveFileChunk);
+                                                receiveFileChunk, lastDiagnostics_);
     output.flush();
     const bool closed = output.close();
     if (fetchError != FeedLoadError::None || !closed || context.received == 0) {
@@ -833,7 +793,7 @@ void GeekNewsActivity::loadHackerNewsTopics() {
 
 bool GeekNewsActivity::loadGeekNewsArticle(const int topicId) {
   std::string markdown;
-  if (!fetchGeekNewsArticle(topicId, markdown, lastError_)) return false;
+  if (!fetchGeekNewsArticle(topicId, markdown, lastError_, lastDiagnostics_)) return false;
   layoutMarkdown(markdown);
   if (layoutOverflow_) lastError_ = FeedLoadError::Memory;
   if (!layoutOverflow_ && articleLines_.empty()) lastError_ = FeedLoadError::Parse;
@@ -883,7 +843,7 @@ bool GeekNewsActivity::loadHackerNewsArticle(const int topicId) {
     const std::string path = "/" + found->url;
     const FeedLoadError fetchError =
         fetchHttps(kExtractorHost, path, "text/markdown, text/plain;q=0.9", &context, receiveFileChunk,
-                   kExtractorTimeoutMs);
+                   lastDiagnostics_, kExtractorTimeoutMs);
     output.flush();
     const bool closed = output.close();
     const bool responseReady = fetchError == FeedLoadError::None && closed && context.received > 0;
@@ -917,6 +877,7 @@ bool GeekNewsActivity::loadHackerNewsArticle(const int topicId) {
 }
 
 void GeekNewsActivity::loadArticle(const int topicId) {
+  lastDiagnostics_ = {};
   articleScrapped_ = false;
   scrapStorageError_ = false;
   const bool loaded = source_ == FeedSource::HackerNews ? loadHackerNewsArticle(topicId)
@@ -1556,6 +1517,16 @@ void GeekNewsActivity::drawStatus(const char* message, const bool retry) {
   renderer.drawCenteredText(UI_12_FONT_ID, centerY - (retry ? 14 : 0), message, true, EpdFontFamily::BOLD);
   if (retry && lastError_ != FeedLoadError::None) {
     renderer.drawCenteredText(UI_10_FONT_ID, centerY + 20, loadErrorMessage());
+    if (lastDiagnostics_.stage != FeedLoadDiagnostics::Stage::None) {
+      // 직렬 연결 없이도 마지막 시도의 단계·오류 코드·수신량을 사진으로 전달할 수 있다.
+      char details[96];
+      std::snprintf(details, sizeof(details), "%s %d | %u/%d B | %us%s%s",
+                    lastDiagnostics_.stage == FeedLoadDiagnostics::Stage::Headers ? "H" : "B",
+                    lastDiagnostics_.code, static_cast<unsigned>(lastDiagnostics_.received),
+                    lastDiagnostics_.expected, static_cast<unsigned>(lastDiagnostics_.elapsedMs / 1000),
+                    lastDiagnostics_.sinkFailed ? " S" : "", lastDiagnostics_.timedOut ? " T" : "");
+      renderer.drawCenteredText(UI_10_FONT_ID, centerY + 50, details);
+    }
   }
   const auto labels = mappedInput.mapLabels(retry ? tr(STR_BACK) : "", retry ? tr(STR_RETRY) : "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

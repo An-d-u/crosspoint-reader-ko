@@ -10,6 +10,17 @@
 
 enum class FeedLoadError : uint8_t { None, Wifi, Dns, Tls, Http, Response, StorageIo, Parse, Memory };
 
+struct FeedLoadDiagnostics {
+  enum class Stage : uint8_t { None, Headers, Body };
+  Stage stage = Stage::None;
+  int code = 0;
+  int expected = -1;
+  size_t received = 0;
+  uint32_t elapsedMs = 0;
+  bool sinkFailed = false;
+  bool timedOut = false;
+};
+
 class GeekNewsActivity final : public Activity {
  public:
   explicit GeekNewsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -79,6 +90,7 @@ class GeekNewsActivity final : public Activity {
   bool scrapStorageError_ = false;
   bool articleScrapped_ = false;
   FeedLoadError lastError_ = FeedLoadError::None;
+  FeedLoadDiagnostics lastDiagnostics_;
   int pendingTopicId_ = 0;
   View articleBackView_ = View::Topics;
   std::string articleTitle_;
