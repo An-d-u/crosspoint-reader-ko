@@ -27,7 +27,7 @@ bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasX
 
 bool ReaderActivity::isTxtFile(const std::string& path) {
   // 같은 독서 화면을 사용하되 MD는 별도의 서식 변환을 거친다.
-  return FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path);
+  return FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path) || FsHelpers::hasPdfExtension(path);
 }
 
 bool ReaderActivity::isBmpFile(const std::string& path) { return FsHelpers::hasBmpExtension(path); }

@@ -159,7 +159,8 @@ void RecentBookProgress::load(RecentBook& book) {
     loadEpubProgress(book, bookData);
   } else if (FsHelpers::hasXtcExtension(book.path)) {
     loadXtcProgress(book, bookData);
-  } else if (FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path)) {
+  } else if (FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path) ||
+             FsHelpers::hasPdfExtension(book.path)) {
     loadTxtProgress(book, bookData);
   }
 }

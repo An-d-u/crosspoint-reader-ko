@@ -44,10 +44,10 @@ const char INDEX_HTML[] PROGMEM = R"HTML(
 <body>
   <main>
     <h1>CrossPoint File Transfer</h1>
-    <p class="hint">EPUB/TXT/XTC files are saved to <code>/books</code>.</p>
+    <p class="hint">EPUB/TXT/MD/PDF/XTC 파일은 <code>/books</code>에 저장됩니다.</p>
     <form id="uploadForm">
       <div id="dropZone" class="drop-zone" role="button" tabindex="0">
-        <input id="fileInput" type="file" name="file" accept=".epub,.txt,.xtc,.xtch,application/epub+zip,text/plain" multiple required>
+        <input id="fileInput" type="file" name="file" accept=".epub,.txt,.md,.pdf,.xtc,.xtch,application/epub+zip,text/plain,text/markdown,application/pdf" multiple required>
         <p class="drop-hint">Drop files here or click to select</p>
       </div>
       <button id="uploadButton" type="submit">Upload</button>

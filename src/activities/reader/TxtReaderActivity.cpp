@@ -34,6 +34,24 @@ constexpr size_t CHUNK_SIZE = 1024;
 constexpr unsigned long PROGRESS_SAVE_DELAY_MS = 750;
 constexpr size_t MAX_PAGES = 65535;
 
+const char* pdfErrorMessage(PdfText::Error error) {
+  switch (error) {
+    case PdfText::Error::Encrypted: return tr(STR_PDF_ENCRYPTED);
+    case PdfText::Error::NoText: return tr(STR_PDF_NO_TEXT);
+    case PdfText::Error::Encoding: return tr(STR_PDF_ENCODING);
+    case PdfText::Error::Unsupported: return tr(STR_PDF_UNSUPPORTED);
+    case PdfText::Error::Invalid: return tr(STR_PDF_INVALID);
+    case PdfText::Error::Limit: return tr(STR_PDF_LIMIT);
+    case PdfText::Error::Memory: return tr(STR_PDF_MEMORY);
+    default: return tr(STR_PAGE_LOAD_ERROR);
+  }
+}
+
+struct PdfTextTemporary {
+  std::string path;
+  ~PdfTextTemporary() { if (!path.empty()) Storage.remove(path.c_str()); }
+};
+
 // 벡터 교체 할당에는 증가분이 아닌 새 버퍼 전체 크기의 연속 메모리가 필요하다.
 bool reservePageOffset(std::vector<uint32_t>& offsets) {
   if (offsets.size() >= MAX_PAGES) return false;
@@ -242,6 +260,8 @@ void TxtReaderActivity::initializeReader() {
   cachedParagraphIndent = SETTINGS.paragraphIndent;
   cachedHyphenation = SETTINGS.hyphenationEnabled;
   markdown = FsHelpers::hasMarkdownExtension(txt->getPath());
+  pdf = FsHelpers::hasPdfExtension(txt->getPath());
+  pdfError = PdfText::Error::None;
 
   renderer.getOrientedViewableTRBL(&cachedOrientedMarginTop, &cachedOrientedMarginRight, &cachedOrientedMarginBottom,
                                    &cachedOrientedMarginLeft);
@@ -271,10 +291,16 @@ bool TxtReaderActivity::buildPageIndex() {
   // 새 캐시가 완성되기 전에는 이전 색인이 새 데이터와 조합되지 않아야 한다.
   Storage.remove((txt->getCachePath() + "/index.bin").c_str());
   GUI.drawPopup(renderer, tr(STR_INDEXING));
+  PdfTextTemporary pdfText;
+  if (pdf) {
+    pdfText.path = txt->getCachePath() + "/pdf-text.tmp";
+    pdfError = PdfText::extract(txt->getPath(), pdfText.path, txt->getCachePath());
+    if (pdfError != PdfText::Error::None) return false;
+  }
   bool converted = false;
   {
     FsFile source, markup;
-    if (!Storage.openFileForRead("TRS", txt->getPath(), source) ||
+    if (!Storage.openFileForRead("TRS", pdf ? pdfText.path : txt->getPath(), source) ||
         !Storage.openFileForWrite("TRS", markupPath, markup)) return false;
     // 읽기/쓰기 버퍼를 변환 중에만 유지하고 EPUB 페이지 구성 전에 해제한다.
     std::vector<char> input(CHUNK_SIZE), output;
@@ -375,7 +401,7 @@ void TxtReaderActivity::render(RenderLock&&) {
 
   if (layoutFailed || pageOffsets.empty()) {
     renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, layoutFailed ? tr(STR_PAGE_LOAD_ERROR) : tr(STR_EMPTY_FILE), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, layoutFailed ? pdfErrorMessage(pdfError) : tr(STR_EMPTY_FILE), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
     return;
   }
@@ -485,7 +511,7 @@ std::array<uint32_t, 16> TxtReaderActivity::indexHeader() const {
           static_cast<uint32_t>(viewportWidth), static_cast<uint32_t>(viewportHeight),
           static_cast<uint32_t>(cachedFontId), static_cast<uint32_t>(UI_FONT_ID),
           cachedParagraphAlignment, cachedCharacterWrap, compression,
-          cachedExtraParagraphSpacing, cachedParagraphIndent, cachedHyphenation, markdown, 0, 0};
+          cachedExtraParagraphSpacing, cachedParagraphIndent, cachedHyphenation, pdf ? 2u : markdown ? 1u : 0u, 0, 0};
 }
 
 bool TxtReaderActivity::loadPageIndexCache() {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Txt.h>
+#include <PdfText.h>
 #include <Epub/Page.h>
 
 #include <array>
@@ -26,6 +27,8 @@ class TxtReaderActivity final : public Activity {
   bool initialized = false;
   bool layoutFailed = false;
   bool markdown = false;
+  bool pdf = false;
+  PdfText::Error pdfError = PdfText::Error::None;
 
   struct CachedTextPage {
     int pageNumber = -1;

@@ -226,7 +226,7 @@ const char* cachePrefix(const std::string& path) {
   if (FsHelpers::hasXtcExtension(path)) {
     return "xtc";
   }
-  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
+  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path) || FsHelpers::hasPdfExtension(path)) {
     return "txt";
   }
   return nullptr;

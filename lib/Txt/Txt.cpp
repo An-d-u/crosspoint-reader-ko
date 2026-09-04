@@ -39,9 +39,11 @@ std::string Txt::getTitle() const {
   size_t lastSlash = filepath.find_last_of('/');
   std::string filename = (lastSlash != std::string::npos) ? filepath.substr(lastSlash + 1) : filepath;
 
-  // Remove .txt extension
-  if (FsHelpers::hasTxtExtension(filename)) {
+  // 지원하는 텍스트 문서의 확장자를 제목에서 제외한다.
+  if (FsHelpers::hasTxtExtension(filename) || FsHelpers::hasPdfExtension(filename)) {
     filename = filename.substr(0, filename.length() - 4);
+  } else if (FsHelpers::hasMarkdownExtension(filename)) {
+    filename = filename.substr(0, filename.length() - 3);
   }
 
   return filename;
