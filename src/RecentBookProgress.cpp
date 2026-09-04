@@ -12,11 +12,9 @@
 
 #include "BookDataStore.h"
 #include "RecentBooksStore.h"
+#include "activities/reader/TextReaderCache.h"
 
 namespace {
-constexpr uint32_t txtCacheMagic = 0x54585449;  // "TXTI"
-constexpr uint8_t txtCacheVersion = 4;
-constexpr size_t txtCacheHeaderSize = 35;
 
 uint16_t readUint16(const uint8_t* data) {
   return static_cast<uint16_t>(data[0]) | (static_cast<uint16_t>(data[1]) << 8);
@@ -131,15 +129,14 @@ void loadTxtProgress(RecentBook& book, const BookDataReference& bookData) {
     return;
   }
 
-  uint8_t indexHeader[txtCacheHeaderSize] = {};
+  uint8_t indexHeader[TextReaderCache::HEADER_BYTES] = {};
   int headerBytes = 0;
   if (!readProgressFile(txt.getCachePath() + "/index.bin", indexHeader, sizeof(indexHeader), headerBytes) ||
-      headerBytes != static_cast<int>(sizeof(indexHeader)) || readUint32(indexHeader) != txtCacheMagic ||
-      indexHeader[4] != txtCacheVersion || readUint32(indexHeader + 5) != txt.getFileSize()) {
+      headerBytes < 0) {
     return;
   }
 
-  const uint32_t totalPages = readUint32(indexHeader + 31);
+  const uint32_t totalPages = TextReaderCache::pageCount(indexHeader, headerBytes, txt.getFileSize());
   if (totalPages == 0) {
     return;
   }

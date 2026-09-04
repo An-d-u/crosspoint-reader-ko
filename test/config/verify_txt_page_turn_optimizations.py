@@ -21,10 +21,13 @@ def main() -> int:
     require(activity_cpp, "loadCachedPage(currentPage, true)", "현재 페이지가 캐시를 사용하지 않습니다")
     require(activity_cpp, "prefetchAdjacentPages();", "인접 페이지를 미리 읽지 않습니다")
 
-    require(activity_h, "std::vector<uint8_t> readBuffer", "재사용 읽기 버퍼가 없습니다")
-    require(activity_cpp, "readBuffer.resize(chunkSize + 1)", "읽기 버퍼를 재사용하지 않습니다")
-    if "malloc(chunkSize + 1)" in activity_cpp or "free(buffer)" in activity_cpp:
-        raise AssertionError("페이지를 읽을 때마다 읽기 버퍼를 할당하거나 해제합니다")
+    require(activity_h, "FsFile pageFile", "페이지 캐시 파일을 재사용하지 않습니다")
+    require(activity_cpp, "Page::deserialize(pageFile)", "완성된 EPUB 페이지 캐시를 사용하지 않습니다")
+    page_load = activity_cpp.split("const Page* TxtReaderActivity::loadCachedPage", 1)[1].split(
+        "void TxtReaderActivity::prefetchAdjacentPages", 1
+    )[0]
+    if "Converter" in page_load or "parseAndBuildPages" in page_load:
+        raise AssertionError("페이지를 넘길 때마다 원문을 다시 변환합니다")
 
     require(activity_cpp, "PROGRESS_SAVE_DELAY_MS = 750", "진행률 저장 지연이 없습니다")
     require(activity_cpp, "queueProgressSave(currentPage);", "페이지 표시 경로가 저장을 예약하지 않습니다")
@@ -34,7 +37,7 @@ def main() -> int:
         "리더 종료 전에 대기 중인 진행률을 저장하지 않습니다",
     )
 
-    print("PASS: TXT 페이지 캐시, 읽기 버퍼 재사용, 지연 저장 연결을 확인했습니다.")
+    print("PASS: TXT·MD 페이지 캐시, 파일 핸들 재사용, 지연 저장 연결을 확인했습니다.")
     return 0
 
 

@@ -85,6 +85,8 @@ class HalFile : public Print {
   int read();  // read a single byte
   size_t write(const void* buf, size_t count);
   size_t write(uint8_t b) override;
+  // 직렬화처럼 여러 번 쓰는 작업에서 하위 SD 파일의 누적 쓰기 오류를 확인한다.
+  bool hasWriteError() const;
   bool rename(const char* newPath);
   bool isDirectory() const;
   void rewindDirectory();
