@@ -1,4 +1,5 @@
 #include "GeekNewsActivity.h"
+#include "FeedLayoutCapacity.h"
 
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
@@ -33,8 +34,9 @@ constexpr const char* kArticleTempPath = "/.crosspoint/feed_article.tmp";
 constexpr size_t kMaxArticleBytes = 48 * 1024;
 constexpr size_t kMaxHackerNewsFeedBytes = 48 * 1024;
 constexpr size_t kMaxArticleLineBytes = 4 * 1024;
-constexpr size_t kMaxLayoutLines = 512;
-constexpr size_t kMaxLayoutSpans = 1024;
+constexpr size_t kMaxLayoutLines = 8192;
+constexpr size_t kMaxLayoutSpans = 8192;
+constexpr size_t kMaxLayoutTextBytes = UINT16_MAX;
 constexpr size_t kMaxFeedEntryBytes = 16 * 1024;
 constexpr uint32_t kNetworkTimeoutMs = 30000;
 constexpr uint32_t kExtractorTimeoutMs = 60000;
@@ -52,6 +54,25 @@ bool hasAllocationRoom(const size_t bytes) {
   const size_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   const size_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   return freeHeap > bytes + kAllocationSafetyBytes && largestBlock > bytes + 256;
+}
+
+void recordMemoryFailure(FeedLoadDiagnostics& diagnostics, const FeedLoadDiagnostics::MemoryStage stage,
+                         const size_t requestedBytes) {
+  diagnostics.memoryStage = stage;
+  diagnostics.requestedBytes = requestedBytes;
+  diagnostics.freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  diagnostics.largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+}
+
+void releaseArticleWifi() {
+  if (WiFi.getMode() == WIFI_OFF) return;
+  // 저장된 접속 정보가 없는 네트워크는 유지해 재시도가 불가능해지는 것을 막는다.
+  const std::string reconnectSsid = WIFI_STORE.getLastConnectedSsid();
+  if (reconnectSsid.empty() || WIFI_STORE.findCredential(reconnectSsid) == nullptr) return;
+  WiFi.disconnect(false);
+  delay(50);
+  WiFi.mode(WIFI_OFF);
+  delay(100);
 }
 
 bool hasAddress(const IPAddress& address) {
@@ -327,7 +348,9 @@ bool receiveGeekArticleChunk(void* rawContext, const uint8_t* data, const size_t
   return true;
 }
 
-bool readArticleFile(std::string& output, FeedLoadError& error) {
+bool readArticleFile(std::string& output, FeedLoadError& error, FeedLoadDiagnostics& diagnostics) {
+  // 완전 수신과 파일 닫기가 확인된 뒤 TLS뿐 아니라 Wi-Fi 버퍼도 먼저 반환한다.
+  releaseArticleWifi();
   HalFile input = Storage.open(kArticleTempPath, O_RDONLY);
   if (!input) {
     error = FeedLoadError::StorageIo;
@@ -340,6 +363,7 @@ bool readArticleFile(std::string& output, FeedLoadError& error) {
     return false;
   }
   if (!hasAllocationRoom(length + 1)) {
+    recordMemoryFailure(diagnostics, FeedLoadDiagnostics::MemoryStage::ArticleBuffer, length + 1);
     input.close();
     error = FeedLoadError::Memory;
     return false;
@@ -390,7 +414,7 @@ bool fetchGeekNewsArticle(const int topicId, std::string& output, FeedLoadError&
     const bool responseReady =
         fetchError == FeedLoadError::None && finalLineProcessed && closed && context.bodyStarted && context.written > 0;
     if (responseReady) {
-      if (readArticleFile(output, error)) {
+      if (readArticleFile(output, error, diagnostics)) {
         Storage.remove(kArticleTempPath);
         return true;
       }
@@ -476,10 +500,7 @@ void GeekNewsActivity::onEnter() {
 void GeekNewsActivity::onExit() {
   disconnectWifi();
   topics_.clear();
-  articleLines_.clear();
-  articleSpans_.clear();
-  articleText_.clear();
-  pageStarts_.clear();
+  releaseArticleLayout();
   Activity::onExit();
 }
 
@@ -572,6 +593,34 @@ std::string GeekNewsActivity::decodeEntities(const std::string& text) {
     index = end + 1;
   }
   return output;
+}
+
+void GeekNewsActivity::releaseArticleLayout() {
+  // clear()만으로는 용량이 반환되지 않아 다음 다운로드와 이전 기사 메모리가 겹친다.
+  std::vector<RichLine>().swap(articleLines_);
+  std::vector<StoredSpan>().swap(articleSpans_);
+  std::vector<char>().swap(articleText_);
+  std::vector<size_t>().swap(pageStarts_);
+}
+
+void GeekNewsActivity::failLayout(const FeedLoadDiagnostics::MemoryStage stage, const size_t requestedBytes,
+                                 const FeedLoadError error) {
+  layoutOverflow_ = true;
+  const bool limit = stage == FeedLoadDiagnostics::MemoryStage::LineLimit ||
+                     stage == FeedLoadDiagnostics::MemoryStage::SpanLimit ||
+                     stage == FeedLoadDiagnostics::MemoryStage::TextLimit;
+  lastError_ = limit ? FeedLoadError::LayoutLimit : error;
+  recordMemoryFailure(lastDiagnostics_, stage, requestedBytes);
+}
+
+template <typename T>
+bool GeekNewsActivity::ensureLayoutCapacity(std::vector<T>& storage, const size_t required, const size_t limit,
+                                           const size_t step, const FeedLoadDiagnostics::MemoryStage stage) {
+  const auto result = FeedLayoutCapacity::ensure(storage, required, limit, step, hasAllocationRoom);
+  if (result.status == FeedLayoutCapacity::Status::Ready) return true;
+  failLayout(stage, result.allocationBytes, result.status == FeedLayoutCapacity::Status::Limit
+                                               ? FeedLoadError::LayoutLimit : FeedLoadError::Memory);
+  return false;
 }
 
 std::string GeekNewsActivity::hackerNewsHtmlToMarkdown(const std::string& html) {
@@ -670,6 +719,7 @@ bool GeekNewsActivity::receiveFeedChunk(void* rawContext, const uint8_t* data, c
 
 void GeekNewsActivity::loadTopics() {
   lastDiagnostics_ = {};
+  releaseArticleLayout();
   if (source_ == FeedSource::HackerNews) {
     loadHackerNewsTopics();
   } else {
@@ -795,7 +845,6 @@ bool GeekNewsActivity::loadGeekNewsArticle(const int topicId) {
   std::string markdown;
   if (!fetchGeekNewsArticle(topicId, markdown, lastError_, lastDiagnostics_)) return false;
   layoutMarkdown(markdown);
-  if (layoutOverflow_) lastError_ = FeedLoadError::Memory;
   if (!layoutOverflow_ && articleLines_.empty()) lastError_ = FeedLoadError::Parse;
   return lastError_ == FeedLoadError::None;
 }
@@ -816,14 +865,12 @@ bool GeekNewsActivity::loadHackerNewsArticle(const int topicId) {
     std::string markdown = hackerNewsHtmlToMarkdown(found->text);
     if (trim(markdown).empty()) markdown = tr(STR_HACKERNEWS_ARTICLE_UNAVAILABLE);
     layoutMarkdown(markdown, discussionUrl);
-    if (layoutOverflow_) lastError_ = FeedLoadError::Memory;
     if (!layoutOverflow_ && articleLines_.empty()) lastError_ = FeedLoadError::Parse;
     return lastError_ == FeedLoadError::None;
   }
 
   if (!hackerNewsUrlCanBeArticle(found->url)) {
     layoutMarkdown(tr(STR_HACKERNEWS_ARTICLE_UNAVAILABLE), found->url);
-    if (layoutOverflow_) lastError_ = FeedLoadError::Memory;
     if (!layoutOverflow_ && articleLines_.empty()) lastError_ = FeedLoadError::Parse;
     return lastError_ == FeedLoadError::None;
   }
@@ -848,7 +895,7 @@ bool GeekNewsActivity::loadHackerNewsArticle(const int topicId) {
     const bool closed = output.close();
     const bool responseReady = fetchError == FeedLoadError::None && closed && context.received > 0;
     if (responseReady) {
-      if (readArticleFile(markdown, lastError_)) {
+      if (readArticleFile(markdown, lastError_, lastDiagnostics_)) {
         fetched = true;
         Storage.remove(kArticleTempPath);
         break;
@@ -871,13 +918,13 @@ bool GeekNewsActivity::loadHackerNewsArticle(const int topicId) {
   splitExtractorResponse(markdown);
   if (trim(markdown).empty()) markdown = tr(STR_HACKERNEWS_ARTICLE_UNAVAILABLE);
   layoutMarkdown(markdown, found->url);
-  if (layoutOverflow_) lastError_ = FeedLoadError::Memory;
   if (!layoutOverflow_ && articleLines_.empty()) lastError_ = FeedLoadError::Parse;
   return lastError_ == FeedLoadError::None;
 }
 
 void GeekNewsActivity::loadArticle(const int topicId) {
   lastDiagnostics_ = {};
+  releaseArticleLayout();
   articleScrapped_ = false;
   scrapStorageError_ = false;
   const bool loaded = source_ == FeedSource::HackerNews ? loadHackerNewsArticle(topicId)
@@ -887,13 +934,7 @@ void GeekNewsActivity::loadArticle(const int topicId) {
     requestUpdate();
     return;
   }
-  const std::string reconnectSsid = WIFI_STORE.getLastConnectedSsid();
-  if (!reconnectSsid.empty() && WIFI_STORE.findCredential(reconnectSsid) != nullptr) {
-    WiFi.disconnect(false);
-    delay(50);
-    WiFi.mode(WIFI_OFF);
-    delay(100);
-  }
+  releaseArticleWifi();
   currentPage_ = 0;
   if (source_ == FeedSource::GeekNews && scrapsLoaded_) {
     articleScrapped_ = scrapStore_.findIndex(pendingTopicId_, sourceUrl_) >= 0;
@@ -985,6 +1026,8 @@ const char* GeekNewsActivity::loadErrorMessage() const {
       return tr(STR_FEED_ERROR_PARSE);
     case FeedLoadError::Memory:
       return tr(STR_FEED_ERROR_MEMORY);
+    case FeedLoadError::LayoutLimit:
+      return tr(STR_FEED_ERROR_LAYOUT_LIMIT);
     case FeedLoadError::None:
     default:
       return "";
@@ -1107,28 +1150,7 @@ void GeekNewsActivity::appendWrappedSpans(const std::vector<Span>& spans, const 
     return EpdFontFamily::REGULAR;
   };
   auto pushLine = [&]() -> bool {
-    if (articleLines_.size() >= kMaxLayoutLines ||
-        articleSpans_.size() + lineSpans.size() > kMaxLayoutSpans) {
-      layoutOverflow_ = true;
-      return false;
-    }
-    if (articleText_.size() > UINT16_MAX) {
-      layoutOverflow_ = true;
-      return false;
-    }
-    line.spanStart = static_cast<uint16_t>(articleSpans_.size());
-    line.spanCount = static_cast<uint16_t>(lineSpans.size());
-    for (const Span& span : lineSpans) {
-      const size_t offset = articleText_.size();
-      if (offset > UINT16_MAX || span.text.size() + 1 > UINT16_MAX - offset) {
-        layoutOverflow_ = true;
-        return false;
-      }
-      articleText_.append(span.text);
-      articleText_.push_back('\0');
-      articleSpans_.push_back({static_cast<uint16_t>(offset), span.style});
-    }
-    articleLines_.push_back(std::move(line));
+    if (!storeLayoutLine(line, lineSpans)) return false;
     line = RichLine{};
     line.indent = indent + prefixWidth;
     line.height = lineHeight;
@@ -1178,13 +1200,9 @@ void GeekNewsActivity::appendWrappedSpans(const std::vector<Span>& spans, const 
   }
   if (!lineSpans.empty() && !pushLine()) return;
   if (spacingAfter > 0) {
-    if (articleLines_.size() >= kMaxLayoutLines) {
-      layoutOverflow_ = true;
-      return;
-    }
     RichLine space;
     space.height = spacingAfter;
-    articleLines_.push_back(std::move(space));
+    storeLayoutLine(space);
   }
 }
 
@@ -1200,25 +1218,7 @@ void GeekNewsActivity::layoutMarkdown(const std::string& markdown, const std::st
   pageStarts_.clear();
   sourceUrl_ = explicitSourceUrl;
   layoutOverflow_ = false;
-
-  const size_t lineStorageBytes = kMaxLayoutLines * sizeof(RichLine);
-  const size_t spanStorageBytes = kMaxLayoutSpans * sizeof(StoredSpan);
-  const size_t textStorageBytes = markdown.size() + articleTitle_.size() + kMaxLayoutSpans + 1;
-  if (articleLines_.capacity() < kMaxLayoutLines && !hasAllocationRoom(lineStorageBytes)) {
-    layoutOverflow_ = true;
-    return;
-  }
-  articleLines_.reserve(kMaxLayoutLines);
-  if (articleSpans_.capacity() < kMaxLayoutSpans && !hasAllocationRoom(spanStorageBytes)) {
-    layoutOverflow_ = true;
-    return;
-  }
-  articleSpans_.reserve(kMaxLayoutSpans);
-  if (articleText_.capacity() < textStorageBytes - 1 && !hasAllocationRoom(textStorageBytes)) {
-    layoutOverflow_ = true;
-    return;
-  }
-  articleText_.reserve(textStorageBytes - 1);
+  lastError_ = FeedLoadError::None;
 
   const size_t sourceMarker = markdown.find("- Original source:");
   if (sourceUrl_.empty() && sourceMarker != std::string::npos) {
@@ -1245,10 +1245,7 @@ void GeekNewsActivity::layoutMarkdown(const std::string& markdown, const std::st
   bool inCodeFence = false;
   size_t cursor = 0;
   while (cursor <= body.size()) {
-    if (layoutOverflow_ || articleLines_.size() >= kMaxLayoutLines) {
-      layoutOverflow_ = true;
-      break;
-    }
+    if (layoutOverflow_) break;
     const size_t end = body.find('\n', cursor);
     std::string line(body.substr(cursor, end == std::string_view::npos ? std::string_view::npos : end - cursor));
     if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -1259,7 +1256,7 @@ void GeekNewsActivity::layoutMarkdown(const std::string& markdown, const std::st
       if (!inCodeFence) {
         RichLine space;
         space.height = 8;
-        articleLines_.push_back(std::move(space));
+        storeLayoutLine(space);
       }
       continue;
     }
@@ -1270,10 +1267,10 @@ void GeekNewsActivity::layoutMarkdown(const std::string& markdown, const std::st
 
     const std::string stripped = trim(line);
     if (stripped.empty()) {
-      if (!articleLines_.empty() && articleLines_.back().height > 0 && articleLines_.back().spanCount > 0) {
+      if (!articleLines_.empty() && articleLines_.back().spanCount > 0) {
         RichLine space;
         space.height = 8;
-        articleLines_.push_back(std::move(space));
+        storeLayoutLine(space);
       }
       continue;
     }
@@ -1281,7 +1278,7 @@ void GeekNewsActivity::layoutMarkdown(const std::string& markdown, const std::st
       RichLine rule;
       rule.height = 14;
       rule.rule = true;
-      articleLines_.push_back(std::move(rule));
+      storeLayoutLine(rule);
       continue;
     }
 
@@ -1322,16 +1319,53 @@ void GeekNewsActivity::layoutMarkdown(const std::string& markdown, const std::st
   if (!layoutOverflow_) rebuildPageStarts();
 }
 
+bool GeekNewsActivity::storeLayoutLine(RichLine line, const std::vector<Span>& spans) {
+  if (layoutOverflow_) return false;
+  if (articleLines_.size() >= kMaxLayoutLines) {
+    failLayout(FeedLoadDiagnostics::MemoryStage::LineLimit);
+    return false;
+  }
+  if (spans.size() > kMaxLayoutSpans - articleSpans_.size()) {
+    failLayout(FeedLoadDiagnostics::MemoryStage::SpanLimit);
+    return false;
+  }
+  size_t textBytes = articleText_.size();
+  for (const auto& span : spans) {
+    if (span.text.size() >= kMaxLayoutTextBytes - textBytes) {
+      failLayout(FeedLoadDiagnostics::MemoryStage::TextLimit);
+      return false;
+    }
+    textBytes += span.text.size() + 1;
+  }
+  // 작은 단위로 확장하되 재할당 전에 연속 빈 공간과 안전 여유를 검사한다.
+  if (!ensureLayoutCapacity(articleLines_, articleLines_.size() + 1, kMaxLayoutLines, 128,
+                            FeedLoadDiagnostics::MemoryStage::LineBuffer) ||
+      !ensureLayoutCapacity(articleSpans_, articleSpans_.size() + spans.size(), kMaxLayoutSpans, 256,
+                            FeedLoadDiagnostics::MemoryStage::SpanBuffer) ||
+      !ensureLayoutCapacity(articleText_, textBytes, kMaxLayoutTextBytes, 4096,
+                            FeedLoadDiagnostics::MemoryStage::TextBuffer)) return false;
+  line.spanStart = static_cast<uint16_t>(articleSpans_.size());
+  line.spanCount = static_cast<uint16_t>(spans.size());
+  for (const auto& span : spans) {
+    articleSpans_.push_back({static_cast<uint16_t>(articleText_.size()), span.style});
+    articleText_.insert(articleText_.end(), span.text.begin(), span.text.end());
+    articleText_.push_back('\0');
+  }
+  articleLines_.push_back(line);
+  return true;
+}
+
 void GeekNewsActivity::rebuildPageStarts() {
   pageStarts_.clear();
-  pageStarts_.push_back(0);
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int availableHeight = renderer.getScreenHeight() - metrics.topPadding - metrics.headerHeight -
                               metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
   int used = 0;
   for (size_t index = 0; index < articleLines_.size(); ++index) {
     const int height = articleLines_[index].height;
-    if (used > 0 && used + height > availableHeight) {
+    if (index == 0 || (used > 0 && used + height > availableHeight)) {
+      if (!ensureLayoutCapacity(pageStarts_, pageStarts_.size() + 1, kMaxLayoutLines, 32,
+                                FeedLoadDiagnostics::MemoryStage::PageBuffer)) return;
       pageStarts_.push_back(index);
       used = 0;
     }
@@ -1527,6 +1561,27 @@ void GeekNewsActivity::drawStatus(const char* message, const bool retry) {
                     lastDiagnostics_.sinkFailed ? " S" : "", lastDiagnostics_.timedOut ? " T" : "");
       renderer.drawCenteredText(UI_10_FONT_ID, centerY + 50, details);
     }
+    if (lastDiagnostics_.memoryStage != FeedLoadDiagnostics::MemoryStage::None) {
+      const char* stage = "";
+      switch (lastDiagnostics_.memoryStage) {
+        case FeedLoadDiagnostics::MemoryStage::ArticleBuffer: stage = "READ"; break;
+        case FeedLoadDiagnostics::MemoryStage::LineBuffer: stage = "LINES"; break;
+        case FeedLoadDiagnostics::MemoryStage::SpanBuffer: stage = "SPANS"; break;
+        case FeedLoadDiagnostics::MemoryStage::TextBuffer: stage = "TEXT"; break;
+        case FeedLoadDiagnostics::MemoryStage::PageBuffer: stage = "PAGES"; break;
+        case FeedLoadDiagnostics::MemoryStage::LineLimit: stage = "LINE-LIMIT"; break;
+        case FeedLoadDiagnostics::MemoryStage::SpanLimit: stage = "SPAN-LIMIT"; break;
+        case FeedLoadDiagnostics::MemoryStage::TextLimit: stage = "TEXT-LIMIT"; break;
+        default: break;
+      }
+      char details[96];
+      std::snprintf(details, sizeof(details), "M %s | need=%u B", stage,
+                    static_cast<unsigned>(lastDiagnostics_.requestedBytes));
+      renderer.drawCenteredText(UI_10_FONT_ID, centerY + 80, details);
+      std::snprintf(details, sizeof(details), "heap=%u B | max=%u B", static_cast<unsigned>(lastDiagnostics_.freeHeap),
+                    static_cast<unsigned>(lastDiagnostics_.largestBlock));
+      renderer.drawCenteredText(UI_10_FONT_ID, centerY + 110, details);
+    }
   }
   const auto labels = mappedInput.mapLabels(retry ? tr(STR_BACK) : "", retry ? tr(STR_RETRY) : "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -1589,7 +1644,7 @@ void GeekNewsActivity::drawArticle() {
     const size_t spanEnd = line.spanStart + line.spanCount;
     for (size_t spanIndex = line.spanStart; spanIndex < spanEnd; ++spanIndex) {
       const StoredSpan& span = articleSpans_[spanIndex];
-      const char* text = articleText_.c_str() + span.textOffset;
+      const char* text = articleText_.data() + span.textOffset;
       EpdFontFamily::Style style = EpdFontFamily::REGULAR;
       if (span.style == InlineStyle::Bold) style = EpdFontFamily::BOLD;
       if (span.style == InlineStyle::Italic) style = EpdFontFamily::ITALIC;

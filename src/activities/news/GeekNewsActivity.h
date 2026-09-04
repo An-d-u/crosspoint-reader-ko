@@ -8,10 +8,13 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
-enum class FeedLoadError : uint8_t { None, Wifi, Dns, Tls, Http, Response, StorageIo, Parse, Memory };
+enum class FeedLoadError : uint8_t { None, Wifi, Dns, Tls, Http, Response, StorageIo, Parse, Memory, LayoutLimit };
 
 struct FeedLoadDiagnostics {
   enum class Stage : uint8_t { None, Headers, Body };
+  enum class MemoryStage : uint8_t {
+    None, ArticleBuffer, LineBuffer, SpanBuffer, TextBuffer, PageBuffer, LineLimit, SpanLimit, TextLimit
+  };
   Stage stage = Stage::None;
   int code = 0;
   int expected = -1;
@@ -19,6 +22,10 @@ struct FeedLoadDiagnostics {
   uint32_t elapsedMs = 0;
   bool sinkFailed = false;
   bool timedOut = false;
+  MemoryStage memoryStage = MemoryStage::None;
+  size_t requestedBytes = 0;
+  size_t freeHeap = 0;
+  size_t largestBlock = 0;
 };
 
 class GeekNewsActivity final : public Activity {
@@ -78,7 +85,7 @@ class GeekNewsActivity final : public Activity {
   std::vector<Topic> topics_;
   std::vector<RichLine> articleLines_;
   std::vector<StoredSpan> articleSpans_;
-  std::string articleText_;
+  std::vector<char> articleText_;
   std::vector<size_t> pageStarts_;
   size_t selectedTopic_ = 0;
   size_t selectedScrap_ = 0;
@@ -98,6 +105,12 @@ class GeekNewsActivity final : public Activity {
 
   void connectWifi();
   void disconnectWifi();
+  void releaseArticleLayout();
+  void failLayout(FeedLoadDiagnostics::MemoryStage stage, size_t requestedBytes = 0,
+                  FeedLoadError error = FeedLoadError::Memory);
+  template <typename T>
+  bool ensureLayoutCapacity(std::vector<T>& storage, size_t required, size_t limit, size_t step,
+                             FeedLoadDiagnostics::MemoryStage stage);
   void loadTopics();
   void loadGeekNewsTopics();
   void loadHackerNewsTopics();
@@ -117,6 +130,7 @@ class GeekNewsActivity final : public Activity {
                            bool codeBlock, int spacingAfter);
   void appendWrappedSpans(const std::vector<Span>& spans, const std::string& prefix, int indent, bool quote,
                           int spacingAfter);
+  bool storeLayoutLine(RichLine line, const std::vector<Span>& spans = {});
   void rebuildPageStarts();
   void drawSources();
   void drawTopics();

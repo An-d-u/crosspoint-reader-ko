@@ -60,9 +60,10 @@ def main() -> int:
     require(activity, "const std::string_view body", "본문 전체를 중복 할당하고 있음")
     require(activity, "receiveGeekArticleChunk", "GeekNews 본문을 스트리밍으로 분리하지 않음")
     require(activity, 'line == "## 댓글과 토론"', "사용하지 않는 GeekNews 댓글을 저장하고 있음")
-    require(activity, "articleSpans_.reserve(kMaxLayoutSpans)", "본문 span 저장소를 미리 확보하지 않음")
-    require(activity, "articleText_.reserve", "본문 문자열을 줄마다 따로 할당하고 있음")
-    require(activity, "kMaxLayoutLines = 512", "비정상적으로 긴 본문의 레이아웃 제한이 없음")
+    require(activity, "ensureLayoutCapacity(articleSpans_", "span 저장소를 안전하게 확장하지 않음")
+    require(activity, "ensureLayoutCapacity(articleText_", "본문 문자열의 연속 저장소를 안전하게 확장하지 않음")
+    require(activity, "kMaxLayoutLines = 8192", "비정상적으로 긴 본문의 레이아웃 상한이 없음")
+    require(activity, "kMaxLayoutSpans = 8192", "스타일 구간의 상한이 없음")
     require(activity, "kWifiConnectTimeoutMs = 15000", "Wi-Fi 재연결 대기 시간이 너무 짧음")
     require(activity, "WIFI_STORE.findCredential(ssid)", "저장된 Wi-Fi 비밀번호로 재연결하지 않음")
     require(activity, "wifiNetworkReady", "Wi-Fi 주소 설정 완료 여부를 확인하지 않음")
@@ -114,7 +115,7 @@ def main() -> int:
         ("content[0] == '-'", "목록 처리가 없음"),
         ('stripped == "---"', "구분선 처리가 없음"),
         ('trim(line).rfind("```", 0)', "코드 블록 처리가 없음"),
-        ("rebuildPageStarts();", "페이지 나누기가 없음"),
+        ("rebuildPageStarts();", "RAM 레이아웃의 페이지 구분이 없음"),
     ]:
         require(activity, token, description)
 
